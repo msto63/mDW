@@ -304,6 +304,7 @@ Arbeitsweise:
 			Description:  webAgentDef.Description,
 			SystemPrompt: webAgentDef.SystemPrompt,
 			Tools:        webAgentDef.Tools,
+			Model:        webAgentDef.Model,
 			MaxSteps:     webAgentDef.MaxSteps,
 			Timeout:      webAgentDef.Timeout,
 			CreatedAt:    time.Now(),
@@ -401,6 +402,11 @@ func fromStoreAgent(a *store.AgentDefinition) *AgentDefinition {
 func (s *Service) SetLLMFunc(fn agent.LLMFunc) {
 	s.llmFunc = fn
 	s.agent.SetLLMFunc(fn)
+}
+
+// SetModelAwareLLMFunc sets the model-aware LLM function for the agent
+func (s *Service) SetModelAwareLLMFunc(fn agent.ModelAwareLLMFunc) {
+	s.agent.SetModelAwareLLMFunc(fn)
 }
 
 // registerBuiltinTools registers built-in tools
@@ -875,6 +881,12 @@ func (s *Service) ExecuteWithAgent(ctx context.Context, agentID string, message 
 		s.store.CreateExecution(context.Background(), toStoreExecution(record))
 	}
 	s.mu.Unlock()
+
+	// Set agent-specific model if defined
+	if agentDef.Model != "" {
+		s.agent.SetModel(agentDef.Model)
+		s.logger.Info("Using agent-specific model", "agent", agentID, "model", agentDef.Model)
+	}
 
 	// Execute the task
 	req := &ExecuteRequest{

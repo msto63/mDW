@@ -78,6 +78,9 @@ type Execution struct {
 // LLMFunc is a function that generates LLM responses
 type LLMFunc func(ctx context.Context, messages []Message) (string, error)
 
+// ModelAwareLLMFunc is a function that generates LLM responses with model selection
+type ModelAwareLLMFunc func(ctx context.Context, model string, messages []Message) (string, error)
+
 // Message represents a chat message
 type Message struct {
 	Role    string
@@ -86,11 +89,13 @@ type Message struct {
 
 // Agent is an AI agent that can use tools
 type Agent struct {
-	tools       map[string]*Tool
-	llmFunc     LLMFunc
-	logger      *logging.Logger
-	maxSteps    int
-	systemPrompt string
+	tools             map[string]*Tool
+	llmFunc           LLMFunc
+	modelAwareLLMFunc ModelAwareLLMFunc
+	logger            *logging.Logger
+	maxSteps          int
+	systemPrompt      string
+	model             string // Model to use for this execution
 }
 
 // Config holds agent configuration
@@ -143,6 +148,21 @@ func (a *Agent) SetLLMFunc(fn LLMFunc) {
 	a.llmFunc = fn
 }
 
+// SetModelAwareLLMFunc sets the model-aware LLM function
+func (a *Agent) SetModelAwareLLMFunc(fn ModelAwareLLMFunc) {
+	a.modelAwareLLMFunc = fn
+}
+
+// SetModel sets the model to use for execution
+func (a *Agent) SetModel(model string) {
+	a.model = model
+}
+
+// GetModel returns the current model
+func (a *Agent) GetModel() string {
+	return a.model
+}
+
 // RegisterTool registers a tool
 func (a *Agent) RegisterTool(tool *Tool) {
 	a.tools[tool.Name] = tool
@@ -165,7 +185,7 @@ func (a *Agent) ListTools() []*Tool {
 
 // Execute runs the agent with a task
 func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
-	if a.llmFunc == nil {
+	if a.llmFunc == nil && a.modelAwareLLMFunc == nil {
 		return nil, fmt.Errorf("LLM function not set")
 	}
 
@@ -203,8 +223,14 @@ func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
 		default:
 		}
 
-		// Get LLM response
-		response, err := a.llmFunc(ctx, messages)
+		// Get LLM response - prefer model-aware function if available
+		var response string
+		var err error
+		if a.modelAwareLLMFunc != nil {
+			response, err = a.modelAwareLLMFunc(ctx, a.model, messages)
+		} else {
+			response, err = a.llmFunc(ctx, messages)
+		}
 		if err != nil {
 			execution.Status = StatusFailed
 			execution.Error = fmt.Sprintf("LLM error: %v", err)

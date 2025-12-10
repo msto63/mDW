@@ -134,6 +134,11 @@ func (s *Server) SetLLMFunc(fn agent.LLMFunc) {
 	s.service.SetLLMFunc(fn)
 }
 
+// SetModelAwareLLMFunc sets the model-aware LLM function
+func (s *Server) SetModelAwareLLMFunc(fn agent.ModelAwareLLMFunc) {
+	s.service.SetModelAwareLLMFunc(fn)
+}
+
 // ConnectMCPServer connects to an MCP server
 func (s *Server) ConnectMCPServer(ctx context.Context, name, command string, args []string, env map[string]string) error {
 	cfg := mcp.ServerConfig{

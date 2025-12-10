@@ -475,8 +475,9 @@ func startLeibniz(ctx context.Context) error {
 		defaultModel = appConfig.Turing.DefaultModel
 	}
 
-	// Create LLM function that calls Turing
-	llmFunc := func(ctx context.Context, messages []leibnizAgent.Message) (string, error) {
+	// Create model-aware LLM function that calls Turing
+	// This allows agents to use different models based on their specialization
+	modelAwareLLMFunc := func(ctx context.Context, model string, messages []leibnizAgent.Message) (string, error) {
 		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 
@@ -500,8 +501,14 @@ func startLeibniz(ctx context.Context) error {
 			}
 		}
 
+		// Use agent-specific model if provided, otherwise fall back to default
+		requestModel := defaultModel
+		if model != "" {
+			requestModel = model
+		}
+
 		resp, err := client.Chat(ctx, &turingpb.ChatRequest{
-			Model:    defaultModel,
+			Model:    requestModel,
 			Messages: protoMessages,
 		})
 		if err != nil {
@@ -511,7 +518,13 @@ func startLeibniz(ctx context.Context) error {
 		return resp.Content, nil
 	}
 
+	// Create a wrapper for backward compatibility with LLMFunc interface
+	llmFunc := func(ctx context.Context, messages []leibnizAgent.Message) (string, error) {
+		return modelAwareLLMFunc(ctx, "", messages)
+	}
+
 	srv.SetLLMFunc(llmFunc)
+	srv.SetModelAwareLLMFunc(modelAwareLLMFunc)
 
 	// Register service tools (RAG, NLP)
 	hypatiaPort := 9220

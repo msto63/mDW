@@ -106,6 +106,7 @@ type AgentDefinition struct {
 	Description  string
 	SystemPrompt string
 	Tools        []string
+	Model        string // Optional: Specific model for this agent
 	MaxSteps     int
 	Timeout      time.Duration
 }
