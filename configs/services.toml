@@ -1,0 +1,150 @@
+# ============================================================================
+# meinDENKWERK (mDW) - Service-Konfiguration
+# ============================================================================
+#
+# Diese Datei definiert alle Services, die von Russell orchestriert werden.
+# Russell liest diese Konfiguration beim Start und verwaltet die Services
+# entsprechend der definierten Parameter.
+#
+# ============================================================================
+
+# Globale Einstellungen
+[orchestrator]
+binary_path = "./bin/mdw"
+log_dir = "./logs"
+startup_timeout = "30s"
+shutdown_timeout = "10s"
+health_check_interval = "10s"
+
+# Externe Dependencies
+[dependencies]
+  [dependencies.ollama]
+  name = "Ollama"
+  type = "http"
+  url = "http://localhost:11434/api/version"
+  required = true
+
+# ============================================================================
+# Services (in Start-Reihenfolge)
+# ============================================================================
+
+# Turing - LLM Management (muss zuerst starten, da andere von ihm abhängen)
+[[services]]
+name = "Turing"
+short_name = "turing"
+description = "LLM Management Service"
+version = "0.1.0"
+grpc_port = 9200
+http_port = 9201
+command = ["./bin/mdw", "serve", "turing"]
+dependencies = []  # Keine internen Dependencies
+external_dependencies = ["ollama"]
+start_order = 1
+max_retries = 3
+enabled = true
+
+[services.health_check]
+type = "tcp"
+interval = "10s"
+timeout = "3s"
+
+# Hypatia - RAG Service
+[[services]]
+name = "Hypatia"
+short_name = "hypatia"
+description = "RAG Service für Wissensverarbeitung"
+version = "0.1.0"
+grpc_port = 9220
+http_port = 9221
+command = ["./bin/mdw", "serve", "hypatia"]
+dependencies = ["turing"]
+external_dependencies = ["ollama"]
+start_order = 2
+max_retries = 3
+enabled = true
+
+[services.health_check]
+type = "tcp"
+interval = "10s"
+timeout = "3s"
+
+# Babbage - NLP Service
+[[services]]
+name = "Babbage"
+short_name = "babbage"
+description = "NLP Processing Service"
+version = "0.1.0"
+grpc_port = 9150
+http_port = 9151
+command = ["./bin/mdw", "serve", "babbage"]
+dependencies = ["turing"]
+external_dependencies = ["ollama"]
+start_order = 3
+max_retries = 3
+enabled = true
+
+[services.health_check]
+type = "tcp"
+interval = "10s"
+timeout = "3s"
+
+# Leibniz - Agentic AI + MCP
+[[services]]
+name = "Leibniz"
+short_name = "leibniz"
+description = "Agentic AI und MCP Integration"
+version = "0.1.0"
+grpc_port = 9140
+http_port = 9141
+command = ["./bin/mdw", "serve", "leibniz"]
+dependencies = ["turing", "hypatia"]
+external_dependencies = ["ollama"]
+start_order = 4
+max_retries = 3
+enabled = true
+
+[services.health_check]
+type = "tcp"
+interval = "10s"
+timeout = "3s"
+
+# Bayes - Logging Service
+[[services]]
+name = "Bayes"
+short_name = "bayes"
+description = "Logging und Metrics Service"
+version = "0.1.0"
+grpc_port = 9120
+http_port = 9121
+command = ["./bin/mdw", "serve", "bayes"]
+dependencies = []
+external_dependencies = []
+start_order = 5
+max_retries = 3
+enabled = true
+
+[services.health_check]
+type = "tcp"
+interval = "10s"
+timeout = "3s"
+
+# Kant - API Gateway (startet zuletzt, da er alle anderen braucht)
+[[services]]
+name = "Kant"
+short_name = "kant"
+description = "API Gateway (HTTP/SSE)"
+version = "0.1.0"
+grpc_port = 0  # Kant hat kein gRPC
+http_port = 8080
+command = ["./bin/mdw", "serve", "kant"]
+dependencies = ["turing", "hypatia", "babbage", "leibniz"]
+external_dependencies = []
+start_order = 10
+max_retries = 3
+enabled = true
+
+[services.health_check]
+type = "http"
+endpoint = "/api/v1/health"
+interval = "10s"
+timeout = "3s"

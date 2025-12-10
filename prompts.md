@@ -1,0 +1,2 @@
+- Analysiere den Sourcecode und prüfe wo bereits gegen die Guardrails (siehe CLAUDE.md) verstossen wurde.Behebe die Fehler 
+- 

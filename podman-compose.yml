@@ -1,0 +1,191 @@
+version: "3.8"
+
+# meinDENKWERK - Podman Compose Configuration
+# ============================================
+# Start: podman-compose up -d
+# Stop:  podman-compose down
+# Logs:  podman-compose logs -f
+
+services:
+  # ─────────────────────────────────────────────────────────────────
+  # KANT - API Gateway
+  # ─────────────────────────────────────────────────────────────────
+  kant:
+    build:
+      context: .
+      dockerfile: containers/kant/Containerfile
+    container_name: mdw-kant
+    ports:
+      - "8080:8080"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=kant
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data:/app/data
+    depends_on:
+      - russell
+      - turing
+      - bayes
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # RUSSELL - Service Discovery & Orchestration
+  # ─────────────────────────────────────────────────────────────────
+  russell:
+    build:
+      context: .
+      dockerfile: containers/russell/Containerfile
+    container_name: mdw-russell
+    ports:
+      - "9100:9100"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=russell
+    volumes:
+      - ./configs:/app/configs:ro
+    depends_on:
+      - bayes
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # TURING - LLM Management
+  # ─────────────────────────────────────────────────────────────────
+  turing:
+    build:
+      context: .
+      dockerfile: containers/turing/Containerfile
+    container_name: mdw-turing
+    ports:
+      - "9200:9200"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=turing
+      - OLLAMA_HOST=host.containers.internal:11434
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    volumes:
+      - ./configs:/app/configs:ro
+    depends_on:
+      - russell
+      - bayes
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # HYPATIA - RAG Service
+  # ─────────────────────────────────────────────────────────────────
+  hypatia:
+    build:
+      context: .
+      dockerfile: containers/hypatia/Containerfile
+    container_name: mdw-hypatia
+    ports:
+      - "9220:9220"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=hypatia
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data/vectors:/app/data/vectors
+    depends_on:
+      - russell
+      - turing
+      - bayes
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # LEIBNIZ - Agentic AI
+  # ─────────────────────────────────────────────────────────────────
+  leibniz:
+    build:
+      context: .
+      dockerfile: containers/leibniz/Containerfile
+    container_name: mdw-leibniz
+    ports:
+      - "9140:9140"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=leibniz
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data:/app/data
+    depends_on:
+      - russell
+      - turing
+      - hypatia
+      - bayes
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # BABBAGE - NLP Service
+  # ─────────────────────────────────────────────────────────────────
+  babbage:
+    build:
+      context: .
+      dockerfile: containers/babbage/Containerfile
+    container_name: mdw-babbage
+    ports:
+      - "9150:9150"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=babbage
+    volumes:
+      - ./configs:/app/configs:ro
+    depends_on:
+      - russell
+      - turing
+      - bayes
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # BAYES - Logging Service
+  # ─────────────────────────────────────────────────────────────────
+  bayes:
+    build:
+      context: .
+      dockerfile: containers/bayes/Containerfile
+    container_name: mdw-bayes
+    ports:
+      - "9120:9120"
+    environment:
+      - MDW_CONFIG=/app/configs/config.toml
+      - MDW_SERVICE=bayes
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data/logs:/app/data/logs
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────
+  # QDRANT - Vector Database (Optional)
+  # ─────────────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: mdw-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    profiles:
+      - qdrant
+    networks:
+      - mdw-network
+    restart: unless-stopped
+
+networks:
+  mdw-network:
+    driver: bridge

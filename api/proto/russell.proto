@@ -1,0 +1,368 @@
+syntax = "proto3";
+
+package mdw.russell;
+
+option go_package = "github.com/msto63/mDW/api/gen/russell";
+
+import "common.proto";
+
+// Russell Service - Service Discovery & Orchestration
+service RussellService {
+  // Service Registration
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Deregister(DeregisterRequest) returns (mdw.common.Empty);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Service Discovery
+  rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+  rpc GetService(GetServiceRequest) returns (ServiceInfo);
+  rpc ListServices(mdw.common.Empty) returns (ServiceListResponse);
+
+  // Service Control (Process Management)
+  rpc StartService(StartServiceRequest) returns (StartServiceResponse);
+  rpc StopService(StopServiceRequest) returns (StopServiceResponse);
+  rpc RestartService(RestartServiceRequest) returns (RestartServiceResponse);
+  rpc GetServiceStatus(GetServiceStatusRequest) returns (ServiceStatusResponse);
+  rpc GetAllServiceStatus(mdw.common.Empty) returns (AllServiceStatusResponse);
+  rpc StreamServiceStatus(mdw.common.Empty) returns (stream ServiceStatusEvent);
+
+  // Health
+  rpc GetSystemHealth(mdw.common.Empty) returns (SystemHealthResponse);
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+
+  // Admin & Orchestration
+  rpc GetSystemOverview(mdw.common.Empty) returns (SystemOverviewResponse);
+  rpc GetMetrics(mdw.common.Empty) returns (MetricsResponse);
+  rpc GetErrors(GetErrorsRequest) returns (ErrorsResponse);
+
+  // Orchestrator Control
+  rpc StartAllServices(StartAllRequest) returns (StartAllResponse);
+  rpc StopAllServices(StopAllRequest) returns (StopAllResponse);
+  rpc GetOrchestratorStatus(mdw.common.Empty) returns (OrchestratorStatusResponse);
+
+  // Pipeline Management
+  rpc CreatePipeline(CreatePipelineRequest) returns (Pipeline);
+  rpc GetPipeline(GetPipelineRequest) returns (Pipeline);
+  rpc ListPipelines(mdw.common.Empty) returns (PipelineListResponse);
+  rpc DeletePipeline(DeletePipelineRequest) returns (mdw.common.Empty);
+  rpc ExecutePipeline(ExecutePipelineRequest) returns (PipelineExecutionResponse);
+}
+
+// Service Registration
+message RegisterRequest {
+  string name = 1;
+  string address = 2;
+  int32 port = 3;
+  map<string, string> metadata = 4;
+  repeated string tags = 5;
+  string version = 6;  // Semantic version (e.g., "1.0.0")
+}
+
+message RegisterResponse {
+  string id = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message DeregisterRequest {
+  string id = 1;
+}
+
+message HeartbeatRequest {
+  string id = 1;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  int64 next_heartbeat_ms = 2;
+}
+
+// Service Discovery
+message DiscoverRequest {
+  string name = 1;
+  repeated string tags = 2;
+}
+
+message DiscoverResponse {
+  repeated ServiceInfo services = 1;
+}
+
+message GetServiceRequest {
+  string id = 1;
+}
+
+message ServiceInfo {
+  string id = 1;
+  string name = 2;
+  string address = 3;
+  int32 port = 4;
+  ServiceStatus status = 5;
+  int64 last_heartbeat = 6;
+  int64 registered_at = 7;
+  map<string, string> metadata = 8;
+  repeated string tags = 9;
+  string version = 10;  // Semantic version (e.g., "1.0.0")
+}
+
+enum ServiceStatus {
+  SERVICE_STATUS_UNKNOWN = 0;
+  SERVICE_STATUS_HEALTHY = 1;
+  SERVICE_STATUS_UNHEALTHY = 2;
+  SERVICE_STATUS_STARTING = 3;
+  SERVICE_STATUS_STOPPING = 4;
+  SERVICE_STATUS_STOPPED = 5;
+  SERVICE_STATUS_FAILED = 6;
+}
+
+// Service Control Messages
+message StartServiceRequest {
+  string name = 1;  // Service name (e.g., "turing", "hypatia")
+}
+
+message StartServiceResponse {
+  bool success = 1;
+  string message = 2;
+  string service_id = 3;
+  int32 pid = 4;
+}
+
+message StopServiceRequest {
+  string name = 1;
+  bool force = 2;  // Force kill if graceful shutdown fails
+}
+
+message StopServiceResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RestartServiceRequest {
+  string name = 1;
+}
+
+message RestartServiceResponse {
+  bool success = 1;
+  string message = 2;
+  string service_id = 3;
+  int32 pid = 4;
+}
+
+message GetServiceStatusRequest {
+  string name = 1;
+}
+
+message ServiceStatusResponse {
+  string name = 1;
+  ServiceStatus status = 2;
+  int32 pid = 3;
+  int32 port = 4;
+  string address = 5;
+  int64 uptime_seconds = 6;
+  int64 started_at = 7;  // Unix timestamp
+  int64 last_heartbeat = 8;
+  string health_message = 9;
+  int32 restart_count = 10;
+  map<string, string> metadata = 11;
+  string version = 12;  // Semantic version (e.g., "1.0.0")
+}
+
+message AllServiceStatusResponse {
+  repeated ServiceStatusResponse services = 1;
+  int32 total = 2;
+  int32 running = 3;
+  int32 stopped = 4;
+  int32 unhealthy = 5;
+}
+
+message ServiceStatusEvent {
+  string name = 1;
+  ServiceStatus previous_status = 2;
+  ServiceStatus current_status = 3;
+  string message = 4;
+  int64 timestamp = 5;
+}
+
+message ServiceListResponse {
+  repeated ServiceInfo services = 1;
+  int32 total = 2;
+}
+
+// System Health
+message SystemHealthResponse {
+  string overall_status = 1;
+  repeated ServiceHealth services = 2;
+  int64 timestamp = 3;
+}
+
+message ServiceHealth {
+  string name = 1;
+  string status = 2;
+  string message = 3;
+  int64 latency_ms = 4;
+}
+
+// Admin & Orchestration Messages
+message SystemOverviewResponse {
+  string timestamp = 1;
+  int32 total_services = 2;
+  int32 healthy_services = 3;
+  int32 degraded_services = 4;
+  int32 unhealthy_services = 5;
+  map<string, AdminServiceStatus> services = 6;
+  MetricsResponse metrics = 7;
+  repeated ErrorEntry recent_errors = 8;
+}
+
+message AdminServiceStatus {
+  string name = 1;
+  string type = 2;
+  string status = 3;
+  string address = 4;
+  string version = 5;
+  string last_seen = 6;
+}
+
+message MetricsResponse {
+  int64 total_requests = 1;
+  int64 successful_requests = 2;
+  int64 failed_requests = 3;
+  int64 average_response_time_ms = 4;
+  double requests_per_second = 5;
+  int64 pipeline_executions = 6;
+  int32 active_connections = 7;
+}
+
+message GetErrorsRequest {
+  int32 limit = 1;
+}
+
+message ErrorsResponse {
+  repeated ErrorEntry errors = 1;
+}
+
+message ErrorEntry {
+  string timestamp = 1;
+  string service = 2;
+  string operation = 3;
+  string error_code = 4;
+  string message = 5;
+  string request_id = 6;
+}
+
+// Pipeline Messages
+message Pipeline {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated PipelineStep steps = 4;
+  string created_at = 5;
+}
+
+message PipelineStep {
+  string id = 1;
+  string service_type = 2;
+  string operation = 3;
+  map<string, string> parameters = 4;
+  repeated string depends_on = 5;
+}
+
+message CreatePipelineRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated PipelineStep steps = 4;
+}
+
+message GetPipelineRequest {
+  string id = 1;
+}
+
+message DeletePipelineRequest {
+  string id = 1;
+}
+
+message PipelineListResponse {
+  repeated Pipeline pipelines = 1;
+}
+
+message ExecutePipelineRequest {
+  string pipeline_id = 1;
+  string input = 2; // JSON encoded input
+}
+
+message PipelineExecutionResponse {
+  string execution_id = 1;
+  string pipeline_id = 2;
+  string status = 3;
+  string started_at = 4;
+  string completed_at = 5;
+  map<string, string> step_results = 6;
+  string error = 7;
+}
+
+// Orchestrator Messages
+message StartAllRequest {
+  bool force = 1;  // Force restart even if services are running
+}
+
+message StartAllResponse {
+  bool success = 1;
+  string message = 2;
+  repeated ServiceStartResult results = 3;
+}
+
+message ServiceStartResult {
+  string name = 1;
+  bool success = 2;
+  string error = 3;
+  int32 attempts = 4;
+}
+
+message StopAllRequest {
+  bool force = 1;  // Force kill if graceful shutdown fails
+}
+
+message StopAllResponse {
+  bool success = 1;
+  string message = 2;
+  repeated ServiceStopResult results = 3;
+}
+
+message ServiceStopResult {
+  string name = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+enum OrchestratorState {
+  ORCHESTRATOR_STATE_UNKNOWN = 0;
+  ORCHESTRATOR_STATE_STARTING = 1;
+  ORCHESTRATOR_STATE_RUNNING = 2;
+  ORCHESTRATOR_STATE_STOPPING = 3;
+  ORCHESTRATOR_STATE_STOPPED = 4;
+}
+
+message OrchestratorStatusResponse {
+  OrchestratorState state = 1;
+  int32 total_services = 2;
+  int32 running_services = 3;
+  int32 healthy_services = 4;
+  int32 failed_services = 5;
+  repeated OrchestratorServiceStatus services = 6;
+  int64 started_at = 7;  // Unix timestamp
+  int64 uptime_seconds = 8;
+}
+
+message OrchestratorServiceStatus {
+  string name = 1;
+  string short_name = 2;
+  ServiceStatus status = 3;
+  bool healthy = 4;
+  int32 pid = 5;
+  int32 port = 6;
+  int64 uptime_seconds = 7;
+  int32 restart_count = 8;
+  string last_error = 9;
+  repeated string dependencies = 10;
+  string version = 11;
+}

@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package mdw.babbage;
+
+option go_package = "github.com/msto63/mDW/api/gen/babbage";
+
+import "common.proto";
+
+// Babbage Service - NLP Processing
+service BabbageService {
+  // Analysis
+  rpc Analyze(AnalyzeRequest) returns (AnalyzeResponse);
+  rpc ExtractEntities(ExtractRequest) returns (EntityResponse);
+  rpc ExtractKeywords(ExtractRequest) returns (KeywordResponse);
+  rpc DetectLanguage(DetectLanguageRequest) returns (LanguageResponse);
+
+  // Transformation
+  rpc Summarize(SummarizeRequest) returns (SummarizeResponse);
+  rpc Translate(TranslateRequest) returns (TranslateResponse);
+  rpc Classify(ClassifyRequest) returns (ClassifyResponse);
+
+  // Sentiment
+  rpc AnalyzeSentiment(SentimentRequest) returns (SentimentResponse);
+
+  // Health
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+}
+
+// Combined Analysis
+message AnalyzeRequest {
+  string text = 1;
+  repeated AnalysisType analyses = 2;
+}
+
+enum AnalysisType {
+  ANALYSIS_TYPE_SENTIMENT = 0;
+  ANALYSIS_TYPE_ENTITIES = 1;
+  ANALYSIS_TYPE_KEYWORDS = 2;
+  ANALYSIS_TYPE_LANGUAGE = 3;
+}
+
+message AnalyzeResponse {
+  SentimentResult sentiment = 1;
+  repeated Entity entities = 2;
+  repeated Keyword keywords = 3;
+  string language = 4;
+  float language_confidence = 5;
+}
+
+// Entity Extraction
+message ExtractRequest {
+  string text = 1;
+  string language = 2;        // optional, auto-detect if empty
+}
+
+message EntityResponse {
+  repeated Entity entities = 1;
+  string language = 2;
+}
+
+message Entity {
+  string text = 1;
+  EntityType type = 2;
+  int32 start = 3;
+  int32 end = 4;
+  float confidence = 5;
+}
+
+enum EntityType {
+  ENTITY_TYPE_UNKNOWN = 0;
+  ENTITY_TYPE_PERSON = 1;
+  ENTITY_TYPE_ORGANIZATION = 2;
+  ENTITY_TYPE_LOCATION = 3;
+  ENTITY_TYPE_DATE = 4;
+  ENTITY_TYPE_TIME = 5;
+  ENTITY_TYPE_MONEY = 6;
+  ENTITY_TYPE_PERCENT = 7;
+  ENTITY_TYPE_EMAIL = 8;
+  ENTITY_TYPE_URL = 9;
+  ENTITY_TYPE_PHONE = 10;
+}
+
+// Keyword Extraction
+message KeywordResponse {
+  repeated Keyword keywords = 1;
+}
+
+message Keyword {
+  string word = 1;
+  float score = 2;
+  int32 frequency = 3;
+}
+
+// Language Detection
+message DetectLanguageRequest {
+  string text = 1;
+}
+
+message LanguageResponse {
+  string language = 1;
+  float confidence = 2;
+  repeated LanguageScore alternatives = 3;
+}
+
+message LanguageScore {
+  string language = 1;
+  float score = 2;
+}
+
+// Summarization
+message SummarizeRequest {
+  string text = 1;
+  int32 max_length = 2;       // in words/tokens
+  SummarizationStyle style = 3;
+  string language = 4;
+}
+
+enum SummarizationStyle {
+  SUMMARIZATION_STYLE_BRIEF = 0;
+  SUMMARIZATION_STYLE_DETAILED = 1;
+  SUMMARIZATION_STYLE_BULLET_POINTS = 2;
+  SUMMARIZATION_STYLE_HEADLINE = 3;
+}
+
+message SummarizeResponse {
+  string summary = 1;
+  int32 original_length = 2;
+  int32 summary_length = 3;
+  float compression_ratio = 4;
+}
+
+// Translation
+message TranslateRequest {
+  string text = 1;
+  string source_language = 2; // "auto" for detection
+  string target_language = 3;
+}
+
+message TranslateResponse {
+  string translated_text = 1;
+  string source_language = 2;
+  string target_language = 3;
+  float confidence = 4;
+}
+
+// Classification
+message ClassifyRequest {
+  string text = 1;
+  repeated string categories = 2;  // Predefined categories
+  bool multi_label = 3;            // Allow multiple labels
+}
+
+message ClassifyResponse {
+  string category = 1;
+  float confidence = 2;
+  repeated CategoryScore scores = 3;
+}
+
+message CategoryScore {
+  string category = 1;
+  float score = 2;
+}
+
+// Sentiment Analysis
+message SentimentRequest {
+  string text = 1;
+  string language = 2;
+}
+
+message SentimentResponse {
+  SentimentResult result = 1;
+}
+
+message SentimentResult {
+  Sentiment sentiment = 1;
+  float score = 2;            // -1.0 to 1.0
+  float confidence = 3;
+  SentimentScores scores = 4;
+}
+
+enum Sentiment {
+  SENTIMENT_UNKNOWN = 0;
+  SENTIMENT_POSITIVE = 1;
+  SENTIMENT_NEGATIVE = 2;
+  SENTIMENT_NEUTRAL = 3;
+  SENTIMENT_MIXED = 4;
+}
+
+message SentimentScores {
+  float positive = 1;
+  float negative = 2;
+  float neutral = 3;
+}

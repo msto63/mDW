@@ -1,0 +1,136 @@
+# meinDENKWERK Konfiguration
+# ===========================
+
+[general]
+name = "meinDENKWERK"
+environment = "development"
+data_dir = "./data"
+log_level = "info"
+
+# ─────────────────────────────────────────────────────────────────
+# KANT - API Gateway
+# ─────────────────────────────────────────────────────────────────
+[kant]
+port = 8080
+host = "0.0.0.0"
+read_timeout = "30s"
+write_timeout = "120s"
+max_request_size = "10MB"
+
+[kant.cors]
+enabled = true
+allowed_origins = ["*"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+
+# ─────────────────────────────────────────────────────────────────
+# RUSSELL - Service Orchestration
+# ─────────────────────────────────────────────────────────────────
+[russell]
+port = 9100
+host = "0.0.0.0"
+health_check_interval = "10s"
+heartbeat_timeout = "30s"
+cleanup_interval = "60s"
+
+# ─────────────────────────────────────────────────────────────────
+# TURING - LLM Management
+# ─────────────────────────────────────────────────────────────────
+[turing]
+port = 9200
+host = "0.0.0.0"
+default_provider = "ollama"
+default_model = "mistral:7b"
+default_temperature = 0.7
+default_max_tokens = 2048
+timeout = "120s"
+
+[turing.providers.ollama]
+enabled = true
+base_url = "http://localhost:11434"
+
+[turing.providers.openai]
+enabled = false
+api_key = "${OPENAI_API_KEY}"
+
+[turing.providers.anthropic]
+enabled = false
+api_key = "${ANTHROPIC_API_KEY}"
+
+# ─────────────────────────────────────────────────────────────────
+# HYPATIA - RAG Service
+# ─────────────────────────────────────────────────────────────────
+[hypatia]
+port = 9220
+host = "0.0.0.0"
+default_collection = "default"
+default_top_k = 5
+min_relevance_score = 0.7
+
+[hypatia.chunking]
+default_size = 512
+default_overlap = 128
+strategy = "sentence"
+
+[hypatia.embedding]
+model = "nomic-embed-text"
+dimensions = 768
+cache_enabled = true
+cache_ttl = "1h"
+
+[hypatia.vectorstore]
+type = "sqlite"  # sqlite, qdrant
+path = "./data/vectors.db"
+
+# Qdrant (optional)
+# [hypatia.vectorstore]
+# type = "qdrant"
+# url = "http://localhost:6333"
+
+# ─────────────────────────────────────────────────────────────────
+# LEIBNIZ - Agentic AI
+# ─────────────────────────────────────────────────────────────────
+[leibniz]
+port = 9140
+host = "0.0.0.0"
+max_iterations = 10
+default_timeout = "60s"
+enable_streaming = true
+
+[leibniz.tools]
+web_search = true
+calculator = true
+code_interpreter = false
+file_reader = true
+shell_command = false
+
+[leibniz.mcp]
+enabled = true
+
+# MCP Server Beispiele (auskommentiert)
+# [[leibniz.mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "./data"]
+
+# ─────────────────────────────────────────────────────────────────
+# BABBAGE - NLP Service
+# ─────────────────────────────────────────────────────────────────
+[babbage]
+port = 9150
+host = "0.0.0.0"
+default_language = "de"
+
+# ─────────────────────────────────────────────────────────────────
+# BAYES - Logging Service
+# ─────────────────────────────────────────────────────────────────
+[bayes]
+port = 9120
+host = "0.0.0.0"
+storage_path = "./data/logs"
+retention_days = 30
+max_log_size = "100MB"
+
+[bayes.rotation]
+enabled = true
+max_files = 10
+compress = true

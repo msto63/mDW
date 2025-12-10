@@ -1,0 +1,794 @@
+openapi: 3.0.3
+info:
+  title: meinDENKWERK API
+  description: |
+    REST API for meinDENKWERK (mDW) - a local AI platform for sovereign data processing.
+
+    This API provides access to:
+    - **Chat**: LLM-powered conversations with streaming support
+    - **Search**: RAG-based semantic search
+    - **Analyze**: NLP text analysis (sentiment, entities, keywords)
+    - **Agent**: Agentic AI task execution with tool support
+
+    All endpoints are served by the Kant API Gateway which routes requests to the appropriate microservices.
+  version: 1.0.0
+  contact:
+    name: meinDENKWERK
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development server
+
+tags:
+  - name: Health
+    description: Service health and status endpoints
+  - name: Chat
+    description: LLM chat completion endpoints
+  - name: Search
+    description: RAG semantic search and document ingestion
+  - name: NLP
+    description: Natural language processing endpoints
+  - name: Agent
+    description: Agentic AI task execution
+
+paths:
+  /:
+    get:
+      summary: API Information
+      description: Returns basic API information and available endpoints
+      operationId: getRoot
+      tags:
+        - Health
+      responses:
+        '200':
+          description: API information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiInfo'
+
+  /health:
+    get:
+      summary: Health Check
+      description: Returns health status of all services
+      operationId: getHealth
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /services:
+    get:
+      summary: List Services
+      description: Returns list of registered services from Russell service discovery
+      operationId: getServices
+      tags:
+        - Health
+      responses:
+        '200':
+          description: List of services
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServicesResponse'
+        '503':
+          description: Russell service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /models:
+    get:
+      summary: List Models
+      description: Returns available LLM models from Turing service
+      operationId: getModels
+      tags:
+        - Chat
+      responses:
+        '200':
+          description: List of models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '503':
+          description: Turing service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chat:
+    post:
+      summary: Chat Completion
+      description: Send a chat completion request to the LLM
+      operationId: postChat
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Turing service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chat/stream:
+    post:
+      summary: Streaming Chat Completion
+      description: Send a streaming chat completion request (Server-Sent Events)
+      operationId: postChatStream
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: SSE stream of chat chunks
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatStreamEvent'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /search:
+    post:
+      summary: Semantic Search
+      description: Perform semantic search on indexed documents
+      operationId: postSearch
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Hypatia service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ingest:
+    post:
+      summary: Ingest Document
+      description: Index a document for semantic search
+      operationId: postIngest
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+      responses:
+        '200':
+          description: Ingestion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Hypatia service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /analyze:
+    post:
+      summary: Analyze Text
+      description: Perform NLP analysis (sentiment, entities, keywords, language detection)
+      operationId: postAnalyze
+      tags:
+        - NLP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeRequest'
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Babbage service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summarize:
+    post:
+      summary: Summarize Text
+      description: Generate a summary of the provided text
+      operationId: postSummarize
+      tags:
+        - NLP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SummarizeRequest'
+      responses:
+        '200':
+          description: Summary result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummarizeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Babbage service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agent:
+    post:
+      summary: Execute Agent Task
+      description: Execute a task using the agentic AI system
+      operationId: postAgent
+      tags:
+        - Agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRequest'
+      responses:
+        '200':
+          description: Agent execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Leibniz service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agent/stream:
+    post:
+      summary: Stream Agent Execution
+      description: Execute a task with streaming updates (Server-Sent Events)
+      operationId: postAgentStream
+      tags:
+        - Agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRequest'
+      responses:
+        '200':
+          description: SSE stream of agent execution steps
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AgentStreamEvent'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agent/tools:
+    get:
+      summary: List Agent Tools
+      description: Returns available tools for agent execution
+      operationId: getAgentTools
+      tags:
+        - Agent
+      responses:
+        '200':
+          description: List of tools
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolsResponse'
+        '503':
+          description: Leibniz service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ApiInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: meinDENKWERK API
+        version:
+          type: string
+          example: "1.0.0"
+        endpoints:
+          type: array
+          items:
+            type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+        uptime:
+          type: string
+          description: Human-readable uptime duration
+        services:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            kant: healthy
+            turing: healthy
+            hypatia: healthy
+
+    ServicesResponse:
+      type: object
+      properties:
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceInfo'
+        total:
+          type: integer
+
+    ServiceInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        port:
+          type: integer
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    ModelsResponse:
+      type: object
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelInfo'
+
+    ModelInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+        size:
+          type: integer
+          format: int64
+        description:
+          type: string
+
+    ChatRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+          minItems: 1
+        model:
+          type: string
+          description: Model to use (optional, uses default if not specified)
+        max_tokens:
+          type: integer
+          description: Maximum tokens in response
+        temperature:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 2
+          description: Sampling temperature (0-2)
+        stream:
+          type: boolean
+          description: Enable streaming (use /chat/stream endpoint)
+        context:
+          type: object
+          additionalProperties:
+            type: string
+
+    Message:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          type: string
+
+    ChatResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        created:
+          type: integer
+          format: int64
+        message:
+          $ref: '#/components/schemas/Message'
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    ChatStreamEvent:
+      type: object
+      description: SSE event data
+      properties:
+        content:
+          type: string
+        done:
+          type: boolean
+
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: Search query
+        collection:
+          type: string
+          description: Collection to search in (optional)
+        top_k:
+          type: integer
+          default: 5
+          description: Number of results to return
+        min_score:
+          type: number
+          format: float
+          default: 0.7
+          description: Minimum similarity score (0-1)
+
+    SearchResponse:
+      type: object
+      properties:
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        total:
+          type: integer
+
+    SearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        score:
+          type: number
+          format: float
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    IngestRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          description: Document content to index
+        title:
+          type: string
+        source:
+          type: string
+        collection:
+          type: string
+          default: default
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    IngestResponse:
+      type: object
+      properties:
+        document_id:
+          type: string
+        success:
+          type: boolean
+
+    AnalyzeRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to analyze
+
+    AnalyzeResponse:
+      type: object
+      properties:
+        language:
+          type: string
+          description: Detected language code (e.g., "en", "de")
+        sentiment:
+          $ref: '#/components/schemas/SentimentResult'
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entity'
+        keywords:
+          type: array
+          items:
+            $ref: '#/components/schemas/Keyword'
+
+    SentimentResult:
+      type: object
+      properties:
+        label:
+          type: string
+          enum: [positive, negative, neutral]
+        confidence:
+          type: number
+          format: float
+
+    Entity:
+      type: object
+      properties:
+        text:
+          type: string
+        type:
+          type: string
+          enum: [PERSON, ORGANIZATION, LOCATION, DATE, NUMBER, EMAIL, URL, PHONE]
+        start:
+          type: integer
+        end:
+          type: integer
+
+    Keyword:
+      type: object
+      properties:
+        word:
+          type: string
+        score:
+          type: number
+          format: float
+
+    SummarizeRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to summarize
+        max_length:
+          type: integer
+          description: Maximum summary length
+        style:
+          type: string
+          enum: [brief, detailed, bullet, headline]
+          default: brief
+
+    SummarizeResponse:
+      type: object
+      properties:
+        summary:
+          type: string
+        original_length:
+          type: integer
+        summary_length:
+          type: integer
+
+    AgentRequest:
+      type: object
+      required:
+        - task
+      properties:
+        task:
+          type: string
+          description: Task description for the agent
+        tools:
+          type: array
+          items:
+            type: string
+          description: List of tools to use (optional)
+        max_steps:
+          type: integer
+          description: Maximum execution steps
+
+    AgentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED, CANCELLED]
+        result:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentStep'
+        tools_used:
+          type: array
+          items:
+            type: string
+
+    AgentStep:
+      type: object
+      properties:
+        step:
+          type: integer
+        action:
+          type: string
+        tool:
+          type: string
+        input:
+          type: string
+        output:
+          type: string
+        reasoning:
+          type: string
+
+    AgentStreamEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [THINKING, TOOL_CALL, TOOL_RESULT, RESPONSE, ERROR]
+        content:
+          type: string
+        iteration:
+          type: integer
+
+    ToolsResponse:
+      type: object
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tool'
+
+    Tool:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: string

@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package mdw.hypatia;
+
+option go_package = "github.com/msto63/mDW/api/gen/hypatia";
+
+import "common.proto";
+
+// Hypatia Service - RAG (Retrieval-Augmented Generation)
+service HypatiaService {
+  // Search
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc HybridSearch(HybridSearchRequest) returns (SearchResponse);
+
+  // Document Management
+  rpc IngestDocument(IngestDocumentRequest) returns (IngestResponse);
+  rpc IngestFile(stream FileChunk) returns (IngestResponse);
+  rpc DeleteDocument(DeleteDocumentRequest) returns (mdw.common.Empty);
+  rpc GetDocument(GetDocumentRequest) returns (DocumentInfo);
+  rpc ListDocuments(ListDocumentsRequest) returns (DocumentListResponse);
+
+  // Collection Management
+  rpc CreateCollection(CreateCollectionRequest) returns (CollectionInfo);
+  rpc DeleteCollection(DeleteCollectionRequest) returns (mdw.common.Empty);
+  rpc ListCollections(mdw.common.Empty) returns (CollectionListResponse);
+  rpc GetCollectionStats(GetCollectionStatsRequest) returns (CollectionStats);
+
+  // RAG
+  rpc AugmentPrompt(AugmentPromptRequest) returns (AugmentPromptResponse);
+
+  // Health
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+}
+
+// Search
+message SearchRequest {
+  string query = 1;
+  string collection = 2;
+  int32 top_k = 3;            // default: 5
+  float min_score = 4;        // default: 0.7
+  map<string, string> filters = 5;
+}
+
+message HybridSearchRequest {
+  string query = 1;
+  string collection = 2;
+  int32 top_k = 3;
+  float min_score = 4;
+  float vector_weight = 5;    // 0.0-1.0, default: 0.7
+  float keyword_weight = 6;   // 0.0-1.0, default: 0.3
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+  int32 total = 2;
+  int64 search_time_ms = 3;
+}
+
+message SearchResult {
+  string chunk_id = 1;
+  string document_id = 2;
+  string content = 3;
+  float score = 4;
+  DocumentMetadata metadata = 5;
+  int32 chunk_index = 6;
+}
+
+// Document Management
+message IngestDocumentRequest {
+  string title = 1;
+  string content = 2;
+  string collection = 3;
+  string source = 4;
+  IngestOptions options = 5;
+  map<string, string> metadata = 6;
+}
+
+message IngestOptions {
+  int32 chunk_size = 1;       // default: 512
+  int32 chunk_overlap = 2;    // default: 128
+  ChunkingStrategy strategy = 3;
+}
+
+enum ChunkingStrategy {
+  CHUNKING_STRATEGY_FIXED = 0;
+  CHUNKING_STRATEGY_SENTENCE = 1;
+  CHUNKING_STRATEGY_PARAGRAPH = 2;
+  CHUNKING_STRATEGY_SEMANTIC = 3;
+}
+
+message FileChunk {
+  bytes data = 1;
+  string filename = 2;
+  string collection = 3;
+  bool final = 4;
+  IngestOptions options = 5;
+}
+
+message IngestResponse {
+  string document_id = 1;
+  int32 chunks_created = 2;
+  int32 tokens_total = 3;
+  bool success = 4;
+  string message = 5;
+}
+
+message DeleteDocumentRequest {
+  string document_id = 1;
+  string collection = 2;
+}
+
+message GetDocumentRequest {
+  string document_id = 1;
+}
+
+message ListDocumentsRequest {
+  string collection = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message DocumentInfo {
+  string id = 1;
+  string title = 2;
+  string source = 3;
+  string collection = 4;
+  int32 chunk_count = 5;
+  int64 created_at = 6;
+  DocumentMetadata metadata = 7;
+}
+
+message DocumentMetadata {
+  string title = 1;
+  string source = 2;
+  string author = 3;
+  string created_at = 4;
+  map<string, string> custom = 5;
+}
+
+message DocumentListResponse {
+  repeated DocumentInfo documents = 1;
+  mdw.common.Pagination pagination = 2;
+}
+
+// Collection Management
+message CreateCollectionRequest {
+  string name = 1;
+  string description = 2;
+  int32 embedding_dimensions = 3;
+}
+
+message DeleteCollectionRequest {
+  string name = 1;
+}
+
+message CollectionInfo {
+  string name = 1;
+  string description = 2;
+  int32 document_count = 3;
+  int32 chunk_count = 4;
+  int64 created_at = 5;
+}
+
+message CollectionListResponse {
+  repeated CollectionInfo collections = 1;
+}
+
+message GetCollectionStatsRequest {
+  string name = 1;
+}
+
+message CollectionStats {
+  string name = 1;
+  int32 document_count = 2;
+  int32 chunk_count = 3;
+  int64 total_tokens = 4;
+  int64 storage_bytes = 5;
+}
+
+// RAG
+message AugmentPromptRequest {
+  string prompt = 1;
+  string collection = 2;
+  int32 top_k = 3;
+  int32 max_context_tokens = 4;
+}
+
+message AugmentPromptResponse {
+  string augmented_prompt = 1;
+  repeated SearchResult sources = 2;
+  int32 context_tokens = 3;
+  int32 sources_used = 4;
+}

@@ -1,0 +1,57 @@
+# meinDENKWERK - Base Container Image
+# ====================================
+
+FROM golang:1.23-alpine AS builder
+
+# Build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum* ./
+COPY foundation/go.mod foundation/go.sum* ./foundation/
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build argument for service name
+ARG SERVICE=mdw
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /app/mdw \
+    ./cmd/mdw
+
+# ─────────────────────────────────────────────────────────────────
+# Runtime Image
+# ─────────────────────────────────────────────────────────────────
+
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+# Create non-root user
+RUN addgroup -g 1000 mdw && \
+    adduser -u 1000 -G mdw -s /bin/sh -D mdw
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/mdw .
+
+# Create data directories
+RUN mkdir -p /app/data/logs /app/data/vectors /app/configs && \
+    chown -R mdw:mdw /app
+
+# Switch to non-root user
+USER mdw
+
+# Default command (override in service-specific Containerfile)
+ENTRYPOINT ["./mdw"]
+CMD ["serve"]

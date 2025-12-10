@@ -1,0 +1,296 @@
+syntax = "proto3";
+
+package mdw.platon;
+
+option go_package = "github.com/msto63/mDW/api/gen/platon";
+
+import "common.proto";
+
+// Platon Service - Pipeline Processing Service
+// Provides centralized prompt/response processing with handler chain
+service PlatonService {
+  // Processing
+  rpc Process(ProcessRequest) returns (ProcessResponse);
+  rpc ProcessPre(ProcessRequest) returns (ProcessResponse);
+  rpc ProcessPost(ProcessRequest) returns (ProcessResponse);
+
+  // Handler Management
+  rpc RegisterHandler(RegisterHandlerRequest) returns (HandlerInfo);
+  rpc UnregisterHandler(UnregisterHandlerRequest) returns (mdw.common.Empty);
+  rpc GetHandler(GetHandlerRequest) returns (HandlerInfo);
+  rpc ListHandlers(mdw.common.Empty) returns (HandlerListResponse);
+
+  // Pipeline Management
+  rpc CreatePipeline(CreatePipelineRequest) returns (PipelineInfo);
+  rpc UpdatePipeline(UpdatePipelineRequest) returns (PipelineInfo);
+  rpc DeletePipeline(DeletePipelineRequest) returns (mdw.common.Empty);
+  rpc GetPipeline(GetPipelineRequest) returns (PipelineInfo);
+  rpc ListPipelines(mdw.common.Empty) returns (PipelineListResponse);
+
+  // Policy Management
+  rpc CreatePolicy(CreatePolicyRequest) returns (PolicyInfo);
+  rpc UpdatePolicy(UpdatePolicyRequest) returns (PolicyInfo);
+  rpc DeletePolicy(DeletePolicyRequest) returns (mdw.common.Empty);
+  rpc GetPolicy(GetPolicyRequest) returns (PolicyInfo);
+  rpc ListPolicies(mdw.common.Empty) returns (PolicyListResponse);
+  rpc TestPolicy(TestPolicyRequest) returns (TestPolicyResponse);
+
+  // Health
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+}
+
+// ============================================================================
+// Processing
+// ============================================================================
+
+message ProcessRequest {
+  string request_id = 1;
+  string pipeline_id = 2;
+  string prompt = 3;
+  string response = 4;  // For post-processing
+  map<string, string> metadata = 5;
+  ProcessOptions options = 6;
+}
+
+message ProcessOptions {
+  bool skip_pre_processing = 1;
+  bool skip_post_processing = 2;
+  bool dry_run = 3;
+  int32 timeout_seconds = 4;
+  bool debug = 5;
+}
+
+message ProcessResponse {
+  string request_id = 1;
+  string processed_prompt = 2;
+  string processed_response = 3;
+  bool blocked = 4;
+  string block_reason = 5;
+  bool modified = 6;
+  repeated AuditEntry audit_log = 7;
+  map<string, string> metadata = 8;
+  int64 duration_ms = 9;
+}
+
+message AuditEntry {
+  string handler = 1;
+  string phase = 2;
+  int64 duration_ms = 3;
+  string error = 4;
+  bool modified = 5;
+  map<string, string> details = 6;
+}
+
+// ============================================================================
+// Handler Management
+// ============================================================================
+
+message RegisterHandlerRequest {
+  string name = 1;
+  HandlerType type = 2;
+  int32 priority = 3;
+  string description = 4;
+  HandlerConfig config = 5;
+}
+
+enum HandlerType {
+  HANDLER_TYPE_UNKNOWN = 0;
+  HANDLER_TYPE_PRE = 1;
+  HANDLER_TYPE_POST = 2;
+  HANDLER_TYPE_BOTH = 3;
+}
+
+message HandlerConfig {
+  bool enabled = 1;
+  map<string, string> settings = 2;
+}
+
+message UnregisterHandlerRequest {
+  string name = 1;
+}
+
+message GetHandlerRequest {
+  string name = 1;
+}
+
+message HandlerInfo {
+  string name = 1;
+  HandlerType type = 2;
+  int32 priority = 3;
+  string description = 4;
+  bool enabled = 5;
+  map<string, string> config = 6;
+}
+
+message HandlerListResponse {
+  repeated HandlerInfo handlers = 1;
+  int32 total = 2;
+}
+
+// ============================================================================
+// Pipeline Management
+// ============================================================================
+
+message CreatePipelineRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+  repeated string pre_handlers = 5;
+  repeated string post_handlers = 6;
+  map<string, string> config = 7;
+}
+
+message UpdatePipelineRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+  repeated string pre_handlers = 5;
+  repeated string post_handlers = 6;
+  map<string, string> config = 7;
+}
+
+message DeletePipelineRequest {
+  string id = 1;
+}
+
+message GetPipelineRequest {
+  string id = 1;
+}
+
+message PipelineInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+  repeated string pre_handlers = 5;
+  repeated string post_handlers = 6;
+  map<string, string> config = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
+}
+
+message PipelineListResponse {
+  repeated PipelineInfo pipelines = 1;
+  int32 total = 2;
+}
+
+// ============================================================================
+// Policy Management
+// ============================================================================
+
+message CreatePolicyRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  PolicyType type = 4;
+  bool enabled = 5;
+  int32 priority = 6;
+  repeated PolicyRule rules = 7;
+  LLMCheckConfig llm_check = 8;
+}
+
+message UpdatePolicyRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  PolicyType type = 4;
+  bool enabled = 5;
+  int32 priority = 6;
+  repeated PolicyRule rules = 7;
+  LLMCheckConfig llm_check = 8;
+}
+
+message DeletePolicyRequest {
+  string id = 1;
+}
+
+message GetPolicyRequest {
+  string id = 1;
+}
+
+enum PolicyType {
+  POLICY_TYPE_UNKNOWN = 0;
+  POLICY_TYPE_CONTENT = 1;
+  POLICY_TYPE_SAFETY = 2;
+  POLICY_TYPE_SCOPE = 3;
+  POLICY_TYPE_PII = 4;
+  POLICY_TYPE_CUSTOM = 5;
+}
+
+message PolicyInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  PolicyType type = 4;
+  bool enabled = 5;
+  int32 priority = 6;
+  repeated PolicyRule rules = 7;
+  LLMCheckConfig llm_check = 8;
+  int64 created_at = 9;
+  int64 updated_at = 10;
+}
+
+message PolicyListResponse {
+  repeated PolicyInfo policies = 1;
+  int32 total = 2;
+}
+
+message PolicyRule {
+  string id = 1;
+  string pattern = 2;
+  PolicyAction action = 3;
+  string message = 4;
+  string replacement = 5;
+  bool case_sensitive = 6;
+}
+
+enum PolicyAction {
+  POLICY_ACTION_UNKNOWN = 0;
+  POLICY_ACTION_BLOCK = 1;
+  POLICY_ACTION_ALLOW = 2;
+  POLICY_ACTION_REDACT = 3;
+  POLICY_ACTION_WARN = 4;
+  POLICY_ACTION_LOG = 5;
+}
+
+message LLMCheckConfig {
+  bool enabled = 1;
+  string model = 2;
+  string prompt = 3;
+  int32 timeout_seconds = 4;
+  float temperature = 5;
+}
+
+message TestPolicyRequest {
+  PolicyInfo policy = 1;
+  string test_text = 2;
+}
+
+message TestPolicyResponse {
+  PolicyDecision decision = 1;
+  repeated PolicyViolation violations = 2;
+  string modified_text = 3;
+  string reason = 4;
+  int64 duration_ms = 5;
+}
+
+enum PolicyDecision {
+  POLICY_DECISION_UNKNOWN = 0;
+  POLICY_DECISION_ALLOW = 1;
+  POLICY_DECISION_BLOCK = 2;
+  POLICY_DECISION_MODIFY = 3;
+  POLICY_DECISION_ESCALATE = 4;
+}
+
+message PolicyViolation {
+  string policy_id = 1;
+  string policy_name = 2;
+  string rule_id = 3;
+  string severity = 4;
+  string description = 5;
+  string location = 6;
+  PolicyAction action = 7;
+  string matched = 8;
+}

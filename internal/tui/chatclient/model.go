@@ -1,0 +1,903 @@
+// ============================================================================
+// meinDENKWERK (mDW) - Lokale KI-Plattform
+// ============================================================================
+//
+// Package:     chatclient
+// Description: Main Bubbletea model for mDW ChatClient
+// Author:      Mike Stoffels with Claude
+// Created:     2025-12-07
+// License:     MIT
+// ============================================================================
+
+package chatclient
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	turingpb "github.com/msto63/mDW/api/gen/turing"
+	"github.com/msto63/mDW/internal/turing/ollama"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+// FocusArea represents which area has focus
+type FocusArea int
+
+const (
+	FocusChat FocusArea = iota
+	FocusModelSelector
+)
+
+// Model is the main Bubbletea model for ChatClient
+type Model struct {
+	// State
+	width          int
+	height         int
+	ready          bool
+	loading        bool
+	streaming      bool
+	turingOnline   bool
+	focus          FocusArea
+	showModelList  bool
+	err            error
+
+	// Components
+	textarea textarea.Model
+	viewport viewport.Model
+	spinner  spinner.Model
+
+	// Chat state
+	messages        []ChatMessage
+	currentModel    string
+	availableModels []ModelInfo
+	modelIndex      int
+	streamBuffer    *strings.Builder
+
+	// Input history
+	inputHistory      []string // Liste der bisherigen Eingaben
+	historyIndex      int      // Aktuelle Position in der Historie (-1 = neue Eingabe)
+	currentInput      string   // Zwischenspeicher für aktuelle Eingabe beim Navigieren
+
+	// Streaming state
+	streamRespCh  <-chan *ollama.ChatResponse
+	streamErrCh   <-chan error
+	streamStart   time.Time
+
+	// Configuration
+	turingAddr   string
+	ollamaClient *ollama.Client
+	useGRPC      bool
+}
+
+// Config holds ChatClient configuration
+type Config struct {
+	TuringAddr string
+	Model      string
+}
+
+// DefaultConfig returns default configuration
+func DefaultConfig() Config {
+	return Config{
+		TuringAddr: "localhost:9200",
+		Model:      "mistral:7b",
+	}
+}
+
+// New creates a new ChatClient model
+func New(cfg Config) Model {
+	// Setup textarea
+	ta := textarea.New()
+	ta.Placeholder = "Nachricht eingeben... (Enter zum Senden, Shift+Enter für neue Zeile)"
+	ta.Focus()
+	ta.CharLimit = 8000
+	ta.SetWidth(80)
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = FocusedInputStyle
+	ta.BlurredStyle.Base = InputStyle
+
+	// Setup spinner
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = SpinnerStyle
+
+	// Default models
+	defaultModels := []ModelInfo{
+		{Name: "mistral:7b", Size: "4.1 GB", Description: "Schnell und effizient", Available: true},
+		{Name: "qwen2.5:7b", Size: "4.7 GB", Description: "Gut für Code", Available: true},
+		{Name: "llama3.2:latest", Size: "2.0 GB", Description: "Meta's neuestes Modell", Available: true},
+	}
+
+	// Load saved model, fallback to config default
+	model := cfg.Model
+	if savedModel := LoadLastModel(); savedModel != "" {
+		model = savedModel
+	}
+
+	// Load input history
+	inputHistory := LoadInputHistory()
+
+	return Model{
+		textarea:        ta,
+		spinner:         sp,
+		messages:        []ChatMessage{},
+		currentModel:    model,
+		availableModels: defaultModels,
+		streamBuffer:    &strings.Builder{},
+		inputHistory:    inputHistory,
+		historyIndex:    -1, // -1 bedeutet: keine Historie-Navigation aktiv
+		turingAddr:      cfg.TuringAddr,
+		ollamaClient:    ollama.NewClient(ollama.DefaultConfig()),
+		useGRPC:         true,
+		focus:           FocusChat,
+	}
+}
+
+// Init initializes the model
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(
+		textarea.Blink,
+		m.spinner.Tick,
+		m.checkTuringStatus,
+		m.loadModels,
+		tea.EnterAltScreen,
+	)
+}
+
+// Update handles messages
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		return m.handleKeyPress(msg)
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
+		headerHeight := 4  // Logo + model selector
+		footerHeight := 8  // Input + status bar + help
+		viewportHeight := msg.Height - headerHeight - footerHeight
+
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width-4, viewportHeight)
+			m.viewport.YPosition = headerHeight
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width - 4
+			m.viewport.Height = viewportHeight
+		}
+		m.textarea.SetWidth(msg.Width - 4)
+		m.updateViewportContent()
+
+	case spinner.TickMsg:
+		if m.loading || m.streaming {
+			m.spinner, cmd = m.spinner.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+
+	case chatResponseMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   "Fehler: " + msg.err.Error(),
+				Timestamp: time.Now(),
+			})
+		} else {
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "assistant",
+				Content:   msg.content,
+				Model:     m.currentModel,
+				Timestamp: time.Now(),
+				Duration:  msg.duration,
+			})
+		}
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+
+	case streamChunkMsg:
+		if msg.err != nil {
+			m.streaming = false
+			m.err = msg.err
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   "Fehler: " + msg.err.Error(),
+				Timestamp: time.Now(),
+			})
+		} else if msg.done {
+			m.streaming = false
+			// Add any final content
+			if msg.delta != "" {
+				m.streamBuffer.WriteString(msg.delta)
+			}
+			// Finalize the streamed message with duration
+			if m.streamBuffer.Len() > 0 {
+				m.messages = append(m.messages, ChatMessage{
+					Role:      "assistant",
+					Content:   m.streamBuffer.String(),
+					Model:     m.currentModel,
+					Timestamp: time.Now(),
+					Duration:  msg.duration,
+				})
+				m.streamBuffer.Reset()
+			}
+		} else {
+			// Append chunk and wait for next
+			m.streamBuffer.WriteString(msg.delta)
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+			return m, m.waitForNextChunk()
+		}
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+
+	case modelsLoadedMsg:
+		if msg.err == nil && len(msg.models) > 0 {
+			m.availableModels = msg.models
+			// Update current model if it's in the list
+			for i, model := range m.availableModels {
+				if model.Name == m.currentModel {
+					m.modelIndex = i
+					break
+				}
+			}
+		}
+
+	case serviceStatusMsg:
+		m.turingOnline = msg.turingOnline
+		if !m.turingOnline {
+			m.useGRPC = false
+		}
+
+	case tickMsg:
+		// Periodic status check
+		return m, tea.Batch(
+			m.checkTuringStatus,
+			tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+				return tickMsg(t)
+			}),
+		)
+	}
+
+	// Update components
+	if m.focus == FocusChat && !m.showModelList {
+		m.textarea, cmd = m.textarea.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
+}
+
+// handleKeyPress handles keyboard input
+func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Model selector navigation - handle FIRST when list is shown
+	if m.showModelList {
+		switch msg.Type {
+		case tea.KeyUp:
+			if m.modelIndex > 0 {
+				m.modelIndex--
+			}
+			return m, nil
+
+		case tea.KeyDown:
+			if m.modelIndex < len(m.availableModels)-1 {
+				m.modelIndex++
+			}
+			return m, nil
+
+		case tea.KeyEnter:
+			if m.modelIndex < len(m.availableModels) {
+				m.currentModel = m.availableModels[m.modelIndex].Name
+				_ = SaveLastModel(m.currentModel)
+			}
+			m.showModelList = false
+			m.focus = FocusChat
+			m.textarea.Focus()
+			return m, nil
+
+		case tea.KeyEsc:
+			m.showModelList = false
+			m.focus = FocusChat
+			m.textarea.Focus()
+			return m, nil
+
+		case tea.KeyRunes:
+			// Handle j/k for vim-style navigation
+			switch string(msg.Runes) {
+			case "k":
+				if m.modelIndex > 0 {
+					m.modelIndex--
+				}
+				return m, nil
+			case "j":
+				if m.modelIndex < len(m.availableModels)-1 {
+					m.modelIndex++
+				}
+				return m, nil
+			case " ":
+				if m.modelIndex < len(m.availableModels) {
+					m.currentModel = m.availableModels[m.modelIndex].Name
+					_ = SaveLastModel(m.currentModel)
+				}
+				m.showModelList = false
+				m.focus = FocusChat
+				m.textarea.Focus()
+				return m, nil
+			}
+		}
+		// Ignore all other keys when model list is open
+		return m, nil
+	}
+
+	// Global shortcuts
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+
+	case tea.KeyCtrlL:
+		// Clear chat
+		m.messages = []ChatMessage{}
+		m.updateViewportContent()
+		return m, nil
+	}
+
+	// Check for Ctrl+O (model selector)
+	if msg.String() == "ctrl+o" {
+		m.showModelList = true
+		m.focus = FocusModelSelector
+		m.textarea.Blur()
+		// Set modelIndex to current model
+		for i, model := range m.availableModels {
+			if model.Name == m.currentModel {
+				m.modelIndex = i
+				break
+			}
+		}
+		return m, nil
+	}
+
+	// Chat input handling
+	if m.focus == FocusChat && !m.loading && !m.streaming {
+		switch msg.Type {
+		case tea.KeyEnter:
+			// Send message with streaming
+			input := strings.TrimSpace(m.textarea.Value())
+			if input != "" {
+				// Zur Historie hinzufügen (nur wenn nicht identisch mit letztem Eintrag)
+				if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != input {
+					m.inputHistory = append(m.inputHistory, input)
+					// Historie auf maximal 100 Einträge begrenzen
+					if len(m.inputHistory) > 100 {
+						m.inputHistory = m.inputHistory[len(m.inputHistory)-100:]
+					}
+					// Historie speichern
+					_ = SaveInputHistory(m.inputHistory)
+				}
+				// Historie-Index zurücksetzen
+				m.historyIndex = -1
+				m.currentInput = ""
+
+				m.messages = append(m.messages, ChatMessage{
+					Role:      "user",
+					Content:   input,
+					Timestamp: time.Now(),
+				})
+				m.textarea.Reset()
+				m.streaming = true
+				m.streamBuffer.Reset()
+				m.updateViewportContent()
+				m.viewport.GotoBottom()
+				return m, tea.Batch(
+					m.spinner.Tick,
+					m.sendMessageWithStreaming(input),
+				)
+			}
+			return m, nil
+
+		case tea.KeyUp:
+			// Nach oben in der Historie navigieren
+			if len(m.inputHistory) > 0 {
+				if m.historyIndex == -1 {
+					// Erste Navigation: aktuelle Eingabe speichern
+					m.currentInput = m.textarea.Value()
+					m.historyIndex = len(m.inputHistory) - 1
+				} else if m.historyIndex > 0 {
+					m.historyIndex--
+				}
+				m.textarea.SetValue(m.inputHistory[m.historyIndex])
+				// Cursor ans Ende setzen
+				m.textarea.CursorEnd()
+			}
+			return m, nil
+
+		case tea.KeyDown:
+			// Nach unten in der Historie navigieren
+			if m.historyIndex != -1 {
+				if m.historyIndex < len(m.inputHistory)-1 {
+					m.historyIndex++
+					m.textarea.SetValue(m.inputHistory[m.historyIndex])
+				} else {
+					// Zurück zur aktuellen Eingabe
+					m.historyIndex = -1
+					m.textarea.SetValue(m.currentInput)
+				}
+				// Cursor ans Ende setzen
+				m.textarea.CursorEnd()
+			}
+			return m, nil
+
+		case tea.KeyPgUp:
+			m.viewport.ViewUp()
+			return m, nil
+
+		case tea.KeyPgDown:
+			m.viewport.ViewDown()
+			return m, nil
+		}
+	}
+
+	// Pass other keys to textarea
+	var cmd tea.Cmd
+	m.textarea, cmd = m.textarea.Update(msg)
+	return m, cmd
+}
+
+// View renders the UI
+func (m Model) View() string {
+	if !m.ready {
+		return "Lade ChatClient..."
+	}
+
+	var b strings.Builder
+
+	// Header with logo and model selector
+	b.WriteString(m.renderHeader())
+	b.WriteString("\n")
+
+	// If model list is shown, show dropdown instead of chat area
+	if m.showModelList {
+		b.WriteString(m.renderModelDropdown())
+		b.WriteString("\n")
+	} else {
+		// Chat viewport
+		b.WriteString(m.renderChatArea())
+		b.WriteString("\n")
+
+		// Input area
+		b.WriteString(m.renderInputArea())
+		b.WriteString("\n")
+	}
+
+	// Status bar
+	b.WriteString(m.renderStatusBar())
+	b.WriteString("\n")
+
+	// Help bar
+	b.WriteString(m.renderHelpBar())
+
+	return b.String()
+}
+
+// renderHeader renders the header with logo and model selector
+func (m Model) renderHeader() string {
+	// Logo
+	logo := LogoStyle.Render(Logo)
+
+	// Status indicator
+	var status string
+	if m.turingOnline {
+		status = StatusOnlineStyle.Render(IconOnline + "Turing verbunden")
+	} else {
+		status = StatusOfflineStyle.Render(IconOffline + "Turing offline (Ollama direkt)")
+	}
+
+	// Model selector
+	modelStr := ModelLabelStyle.Render("Modell: ") + SelectedModelItemStyle.Render(m.currentModel)
+	if m.showModelList {
+		modelStr = FocusedModelSelectorStyle.Render(modelStr)
+	} else {
+		modelStr = ModelSelectorStyle.Render(modelStr)
+	}
+
+	header := lipgloss.JoinHorizontal(lipgloss.Center,
+		logo,
+		strings.Repeat(" ", 3),
+		status,
+	)
+
+	titlePanel := TitlePanelStyle.Width(m.width - 4).Render(header)
+
+	// When model list is shown, just return title panel (dropdown rendered separately)
+	if m.showModelList {
+		return titlePanel
+	}
+
+	return titlePanel + "\n" + modelStr
+}
+
+// renderModelDropdown renders the model selection dropdown as a full panel
+func (m Model) renderModelDropdown() string {
+	var content strings.Builder
+
+	// Title
+	content.WriteString(HeaderStyle.Render("  Modell auswählen"))
+	content.WriteString("\n\n")
+
+	// Model list
+	for i, model := range m.availableModels {
+		var line string
+		if i == m.modelIndex {
+			// Selected item with cursor and highlighting
+			line = SelectedModelItemStyle.Render(fmt.Sprintf(" ▶ %s ", model.Name))
+			if model.Description != "" && model.Description != model.Name {
+				line += HelpDescStyle.Render(" - " + model.Description)
+			}
+			line += HelpDescStyle.Render(fmt.Sprintf(" (%s)", model.Size))
+		} else {
+			// Normal item
+			line = ModelItemStyle.Render(fmt.Sprintf("   %s ", model.Name))
+			if model.Description != "" && model.Description != model.Name {
+				line += HelpDescStyle.Render(" - " + model.Description)
+			}
+			line += HelpDescStyle.Render(fmt.Sprintf(" (%s)", model.Size))
+		}
+		content.WriteString(line)
+		content.WriteString("\n")
+	}
+
+	// Footer with count and hints
+	content.WriteString("\n")
+	content.WriteString(HelpDescStyle.Render(fmt.Sprintf("  [%d von %d Modellen]", m.modelIndex+1, len(m.availableModels))))
+	content.WriteString("\n\n")
+	content.WriteString(HelpStyle.Render("  ↑/↓ navigieren • Enter auswählen • Esc schließen"))
+
+	// Render in a prominent panel
+	panelHeight := m.viewport.Height + 2
+	return FocusedModelSelectorStyle.
+		Width(m.width - 2).
+		Height(panelHeight).
+		Render(content.String())
+}
+
+// renderChatArea renders the main chat viewport
+func (m Model) renderChatArea() string {
+	style := ChatPanelStyle.Width(m.width - 2).Height(m.viewport.Height + 2)
+	if m.focus == FocusChat {
+		style = FocusedChatPanelStyle.Width(m.width - 2).Height(m.viewport.Height + 2)
+	}
+	return style.Render(m.viewport.View())
+}
+
+// renderInputArea renders the input textarea
+func (m Model) renderInputArea() string {
+	var input string
+
+	if m.loading {
+		input = m.spinner.View() + ThinkingStyle.Render(" Generiere Antwort...")
+	} else if m.streaming {
+		input = m.spinner.View() + ThinkingStyle.Render(" Empfange Antwort...")
+	} else {
+		input = m.textarea.View()
+	}
+
+	style := InputStyle.Width(m.width - 2)
+	if m.focus == FocusChat && !m.loading && !m.streaming {
+		style = FocusedInputStyle.Width(m.width - 2)
+	}
+
+	return style.Render(input)
+}
+
+// renderStatusBar renders the status bar with current model and version
+func (m Model) renderStatusBar() string {
+	// Left: Model info
+	modelInfo := IconModel + SelectedModelItemStyle.Render(m.currentModel)
+
+	// Center: Version info
+	versionInfo := HelpDescStyle.Render("v" + Version)
+
+	// Right: Connection status
+	var status string
+	if m.turingOnline {
+		status = StatusOnlineStyle.Render(IconOnline + "Turing")
+	} else {
+		status = StatusOfflineStyle.Render(IconOffline + "Ollama")
+	}
+
+	// Build the status bar
+	leftPart := ModelLabelStyle.Render("Aktives Modell: ") + modelInfo
+	centerPart := versionInfo
+	rightPart := status
+
+	// Calculate padding
+	leftLen := lipgloss.Width(leftPart)
+	centerLen := lipgloss.Width(centerPart)
+	rightLen := lipgloss.Width(rightPart)
+	totalLen := leftLen + centerLen + rightLen
+	availableSpace := m.width - totalLen - 4
+	if availableSpace < 2 {
+		availableSpace = 2
+	}
+	leftPadding := availableSpace / 2
+	rightPadding := availableSpace - leftPadding
+
+	content := leftPart + strings.Repeat(" ", leftPadding) + centerPart + strings.Repeat(" ", rightPadding) + rightPart
+
+	return StatusBarStyle.Width(m.width - 2).Render(content)
+}
+
+// renderHelpBar renders the help shortcuts bar
+func (m Model) renderHelpBar() string {
+	var items []string
+
+	if m.showModelList {
+		items = []string{
+			RenderKeyHint("↑/↓", "navigieren"),
+			RenderKeyHint("Enter", "auswählen"),
+			RenderKeyHint("Esc", "schließen"),
+		}
+	} else {
+		items = []string{
+			RenderKeyHint("Enter", "senden"),
+			RenderKeyHint("↑/↓", "Historie"),
+			RenderKeyHint("Ctrl+O", "Modell"),
+			RenderKeyHint("Ctrl+L", "leeren"),
+			RenderKeyHint("PgUp/Dn", "scrollen"),
+			RenderKeyHint("Ctrl+C", "beenden"),
+		}
+	}
+
+	return HelpStyle.Render(strings.Join(items, "  "))
+}
+
+// updateViewportContent updates the viewport with current messages
+func (m *Model) updateViewportContent() {
+	var content strings.Builder
+
+	for _, msg := range m.messages {
+		switch msg.Role {
+		case "user":
+			// User label with timestamp
+			timeStr := msg.Timestamp.Format("15:04")
+			content.WriteString(RenderUserLabel() + "  " + HelpDescStyle.Render(timeStr))
+			content.WriteString("\n")
+			content.WriteString(UserMessageStyle.Width(m.width - 6).Render(msg.Content))
+			content.WriteString("\n\n")
+
+		case "assistant":
+			modelLabel := m.currentModel
+			if msg.Model != "" {
+				modelLabel = msg.Model
+			}
+			// Assistant label with timestamp and duration
+			timeStr := msg.Timestamp.Format("15:04")
+			durationStr := ""
+			if msg.Duration > 0 {
+				durationStr = fmt.Sprintf(" (%.1fs)", msg.Duration.Seconds())
+			}
+			content.WriteString(RenderAssistantLabel(modelLabel) + "  " + HelpDescStyle.Render(timeStr+durationStr))
+			content.WriteString("\n")
+			content.WriteString(AssistantMessageStyle.Width(m.width - 6).Render(msg.Content))
+			content.WriteString("\n\n")
+
+		case "system":
+			content.WriteString(SystemMessageStyle.Render(msg.Content))
+			content.WriteString("\n\n")
+		}
+	}
+
+	// Show streaming content
+	if m.streaming && m.streamBuffer.Len() > 0 {
+		timeStr := time.Now().Format("15:04")
+		content.WriteString(RenderAssistantLabel(m.currentModel) + "  " + HelpDescStyle.Render(timeStr))
+		content.WriteString("\n")
+		content.WriteString(AssistantMessageStyle.Width(m.width - 6).Render(m.streamBuffer.String()))
+		content.WriteString(ThinkingStyle.Render("..."))
+		content.WriteString("\n")
+	}
+
+	m.viewport.SetContent(content.String())
+}
+
+// sendMessageWithStreaming initiates streaming and returns waitForNextChunk command
+func (m *Model) sendMessageWithStreaming(input string) tea.Cmd {
+	// Build message history
+	var messages []ollama.ChatMessage
+	for _, msg := range m.messages {
+		if msg.Role == "user" || msg.Role == "assistant" {
+			messages = append(messages, ollama.ChatMessage{
+				Role:    msg.Role,
+				Content: msg.Content,
+			})
+		}
+	}
+
+	// Start streaming via Ollama
+	ctx := context.Background() // No timeout for streaming - we handle it via chunks
+	respCh, errCh := m.ollamaClient.ChatStream(ctx, &ollama.ChatRequest{
+		Model:    m.currentModel,
+		Messages: messages,
+	})
+
+	// Store channels in model for later use
+	m.streamRespCh = respCh
+	m.streamErrCh = errCh
+	m.streamStart = time.Now()
+
+	// Return command to wait for first chunk
+	return m.waitForNextChunk()
+}
+
+// waitForNextChunk returns a command that waits for the next streaming chunk
+func (m *Model) waitForNextChunk() tea.Cmd {
+	respCh := m.streamRespCh
+	errCh := m.streamErrCh
+	startTime := m.streamStart
+
+	return func() tea.Msg {
+		select {
+		case resp, ok := <-respCh:
+			if !ok {
+				// Channel closed, streaming done
+				return streamChunkMsg{done: true, duration: time.Since(startTime)}
+			}
+			if resp.Done {
+				return streamChunkMsg{delta: resp.Message.Content, done: true, duration: time.Since(startTime)}
+			}
+			return streamChunkMsg{delta: resp.Message.Content, done: false}
+
+		case err, ok := <-errCh:
+			if ok && err != nil {
+				return streamChunkMsg{err: err, done: true}
+			}
+			// Error channel closed without error
+			return streamChunkMsg{done: true, duration: time.Since(startTime)}
+		}
+	}
+}
+
+// sendMessage sends a message via gRPC or Ollama (non-streaming fallback)
+func (m *Model) sendMessage(input string) tea.Cmd {
+	return func() tea.Msg {
+		startTime := time.Now()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		// Build message history
+		var messages []ollama.ChatMessage
+		for _, msg := range m.messages {
+			if msg.Role == "user" || msg.Role == "assistant" {
+				messages = append(messages, ollama.ChatMessage{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+		}
+
+		// Try gRPC first
+		if m.useGRPC {
+			conn, err := m.dialGRPC()
+			if err == nil {
+				defer conn.Close()
+				client := turingpb.NewTuringServiceClient(conn)
+
+				// Build gRPC messages
+				var grpcMessages []*turingpb.Message
+				for _, msg := range messages {
+					grpcMessages = append(grpcMessages, &turingpb.Message{
+						Role:    msg.Role,
+						Content: msg.Content,
+					})
+				}
+
+				// Use streaming for better UX
+				stream, err := client.StreamChat(ctx, &turingpb.ChatRequest{
+					Messages: grpcMessages,
+					Model:    m.currentModel,
+				})
+				if err == nil {
+					var fullContent strings.Builder
+					for {
+						chunk, err := stream.Recv()
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							return chatResponseMsg{err: err}
+						}
+						fullContent.WriteString(chunk.Delta)
+						if chunk.Done {
+							break
+						}
+					}
+					return chatResponseMsg{content: fullContent.String(), model: m.currentModel, duration: time.Since(startTime)}
+				}
+			}
+		}
+
+		// Fallback to Ollama directly
+		resp, err := m.ollamaClient.Chat(ctx, &ollama.ChatRequest{
+			Model:    m.currentModel,
+			Messages: messages,
+		})
+
+		if err != nil {
+			return chatResponseMsg{err: err}
+		}
+
+		return chatResponseMsg{content: resp.Message.Content, model: m.currentModel, duration: time.Since(startTime)}
+	}
+}
+
+// dialGRPC creates a gRPC connection
+func (m *Model) dialGRPC() (*grpc.ClientConn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	return grpc.DialContext(ctx, m.turingAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+}
+
+// checkTuringStatus checks if Turing service is available
+func (m Model) checkTuringStatus() tea.Msg {
+	conn, err := m.dialGRPC()
+	if err != nil {
+		return serviceStatusMsg{turingOnline: false, err: err}
+	}
+	conn.Close()
+	return serviceStatusMsg{turingOnline: true}
+}
+
+// loadModels loads available models from Ollama
+func (m Model) loadModels() tea.Msg {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := m.ollamaClient.ListModels(ctx)
+	if err != nil {
+		return modelsLoadedMsg{err: err}
+	}
+
+	var modelInfos []ModelInfo
+	for _, model := range resp.Models {
+		size := "unknown"
+		if model.Size > 0 {
+			size = fmt.Sprintf("%.1f GB", float64(model.Size)/(1024*1024*1024))
+		}
+		modelInfos = append(modelInfos, ModelInfo{
+			Name:        model.Name,
+			Size:        size,
+			Description: model.Name,
+			Available:   true,
+		})
+	}
+
+	return modelsLoadedMsg{models: modelInfos}
+}
+
+// Run starts the ChatClient TUI
+func Run(cfg Config) error {
+	p := tea.NewProgram(New(cfg), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}

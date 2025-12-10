@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package mdw.bayes;
+
+option go_package = "github.com/msto63/mDW/api/gen/bayes";
+
+import "common.proto";
+
+// Bayes Service - Centralized Logging
+service BayesService {
+  // Logging
+  rpc Log(LogRequest) returns (mdw.common.Empty);
+  rpc LogBatch(LogBatchRequest) returns (LogBatchResponse);
+  rpc QueryLogs(QueryLogsRequest) returns (QueryLogsResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+
+  // Metrics
+  rpc RecordMetric(MetricRequest) returns (mdw.common.Empty);
+  rpc RecordMetricBatch(MetricBatchRequest) returns (mdw.common.Empty);
+  rpc QueryMetrics(QueryMetricsRequest) returns (QueryMetricsResponse);
+
+  // Health
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+  rpc GetStats(mdw.common.Empty) returns (LogStats);
+}
+
+// Logging
+message LogRequest {
+  LogEntry entry = 1;
+}
+
+message LogBatchRequest {
+  repeated LogEntry entries = 1;
+}
+
+message LogBatchResponse {
+  int32 accepted = 1;
+  int32 rejected = 2;
+}
+
+message LogEntry {
+  string service = 1;
+  LogLevel level = 2;
+  string message = 3;
+  int64 timestamp = 4;
+  map<string, string> fields = 5;
+  string request_id = 6;
+  string trace_id = 7;
+  string caller = 8;          // file:line
+  string error = 9;
+}
+
+enum LogLevel {
+  LOG_LEVEL_DEBUG = 0;
+  LOG_LEVEL_INFO = 1;
+  LOG_LEVEL_WARN = 2;
+  LOG_LEVEL_ERROR = 3;
+  LOG_LEVEL_FATAL = 4;
+}
+
+message QueryLogsRequest {
+  string service = 1;
+  LogLevel min_level = 2;
+  string search = 3;
+  int64 from_timestamp = 4;
+  int64 to_timestamp = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+  string request_id = 8;
+  SortOrder sort = 9;
+}
+
+enum SortOrder {
+  SORT_ORDER_DESC = 0;
+  SORT_ORDER_ASC = 1;
+}
+
+message QueryLogsResponse {
+  repeated LogEntry entries = 1;
+  int32 total = 2;
+  bool has_more = 3;
+}
+
+message StreamLogsRequest {
+  string service = 1;
+  LogLevel min_level = 2;
+  bool follow = 3;
+}
+
+// Metrics
+message MetricRequest {
+  MetricEntry entry = 1;
+}
+
+message MetricBatchRequest {
+  repeated MetricEntry entries = 1;
+}
+
+message MetricEntry {
+  string service = 1;
+  string name = 2;
+  double value = 3;
+  MetricType type = 4;
+  int64 timestamp = 5;
+  map<string, string> labels = 6;
+}
+
+enum MetricType {
+  METRIC_TYPE_COUNTER = 0;
+  METRIC_TYPE_GAUGE = 1;
+  METRIC_TYPE_HISTOGRAM = 2;
+}
+
+message QueryMetricsRequest {
+  string service = 1;
+  string name = 2;
+  int64 from_timestamp = 3;
+  int64 to_timestamp = 4;
+  map<string, string> labels = 5;
+  AggregationType aggregation = 6;
+  int32 bucket_seconds = 7;
+}
+
+enum AggregationType {
+  AGGREGATION_TYPE_NONE = 0;
+  AGGREGATION_TYPE_SUM = 1;
+  AGGREGATION_TYPE_AVG = 2;
+  AGGREGATION_TYPE_MIN = 3;
+  AGGREGATION_TYPE_MAX = 4;
+  AGGREGATION_TYPE_COUNT = 5;
+}
+
+message QueryMetricsResponse {
+  repeated MetricDataPoint data_points = 1;
+  string service = 2;
+  string name = 3;
+}
+
+message MetricDataPoint {
+  int64 timestamp = 1;
+  double value = 2;
+  map<string, string> labels = 3;
+}
+
+// Stats
+message LogStats {
+  int64 total_logs = 1;
+  int64 total_metrics = 2;
+  int64 storage_bytes = 3;
+  map<string, int64> logs_by_service = 4;
+  map<string, int64> logs_by_level = 5;
+  int64 oldest_log = 6;
+  int64 newest_log = 7;
+}

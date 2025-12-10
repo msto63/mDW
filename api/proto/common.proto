@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package mdw.common;
+
+option go_package = "github.com/msto63/mDW/api/gen/common";
+
+// Empty message für Requests/Responses ohne Payload
+message Empty {}
+
+// Standard Health Check Response
+message HealthCheckResponse {
+  string status = 1;      // healthy, unhealthy, degraded
+  string service = 2;
+  string version = 3;
+  int64 uptime_seconds = 4;
+  map<string, string> details = 5;
+}
+
+// Standard Health Check Request
+message HealthCheckRequest {}
+
+// Pagination
+message Pagination {
+  int32 page = 1;
+  int32 page_size = 2;
+  int32 total = 3;
+  int32 total_pages = 4;
+}
+
+// Error Details
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  map<string, string> metadata = 3;
+}

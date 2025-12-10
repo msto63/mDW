@@ -1,0 +1,34 @@
+# meinDENKWERK - Russell (Service Discovery)
+# ===========================================
+
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /build
+COPY go.mod go.sum* ./
+COPY foundation/go.mod foundation/go.sum* ./foundation/
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /app/mdw \
+    ./cmd/mdw
+
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -g 1000 mdw && \
+    adduser -u 1000 -G mdw -s /bin/sh -D mdw
+
+WORKDIR /app
+COPY --from=builder /app/mdw .
+RUN mkdir -p /app/configs && chown -R mdw:mdw /app
+
+USER mdw
+
+EXPOSE 9100
+
+ENTRYPOINT ["./mdw"]
+CMD ["serve", "russell"]

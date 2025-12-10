@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package mdw.turing;
+
+option go_package = "github.com/msto63/mDW/api/gen/turing";
+
+import "common.proto";
+
+// Turing Service - LLM Management
+service TuringService {
+  // Chat
+  rpc Chat(ChatRequest) returns (ChatResponse);
+  rpc StreamChat(ChatRequest) returns (stream ChatChunk);
+
+  // Embeddings
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  rpc BatchEmbed(BatchEmbedRequest) returns (BatchEmbedResponse);
+
+  // Model Management
+  rpc ListModels(mdw.common.Empty) returns (ModelListResponse);
+  rpc GetModel(GetModelRequest) returns (ModelInfo);
+  rpc PullModel(PullModelRequest) returns (stream PullProgress);
+
+  // Health
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+}
+
+// Chat Messages
+message ChatRequest {
+  string model = 1;
+  repeated Message messages = 2;
+  float temperature = 3;      // 0.0-2.0, default: 0.7
+  int32 max_tokens = 4;       // default: 2048
+  string system_prompt = 5;
+  string conversation_id = 6;
+  repeated string stop = 7;
+  float top_p = 8;            // default: 1.0
+  float frequency_penalty = 9;
+  float presence_penalty = 10;
+}
+
+message Message {
+  string role = 1;    // system, user, assistant
+  string content = 2;
+}
+
+message ChatResponse {
+  string content = 1;
+  string model = 2;
+  int32 prompt_tokens = 3;
+  int32 completion_tokens = 4;
+  int32 total_tokens = 5;
+  string finish_reason = 6;   // stop, length, error
+  string conversation_id = 7;
+}
+
+message ChatChunk {
+  string delta = 1;
+  bool done = 2;
+  string finish_reason = 3;
+  int32 prompt_tokens = 4;
+  int32 completion_tokens = 5;
+}
+
+// Embeddings
+message EmbedRequest {
+  string model = 1;
+  string input = 2;
+}
+
+message EmbedResponse {
+  repeated float embedding = 1;
+  int32 dimensions = 2;
+  int32 tokens = 3;
+  string model = 4;
+}
+
+message BatchEmbedRequest {
+  string model = 1;
+  repeated string inputs = 2;
+}
+
+message BatchEmbedResponse {
+  repeated EmbedResult embeddings = 1;
+  int32 total_tokens = 2;
+  string model = 3;
+}
+
+message EmbedResult {
+  repeated float embedding = 1;
+  int32 tokens = 2;
+  int32 index = 3;
+}
+
+// Model Management
+message ModelListResponse {
+  repeated ModelInfo models = 1;
+}
+
+message GetModelRequest {
+  string name = 1;
+}
+
+message ModelInfo {
+  string name = 1;
+  string provider = 2;        // ollama, openai, anthropic
+  int64 size = 3;             // in bytes
+  string modified_at = 4;
+  map<string, string> details = 5;
+  bool available = 6;
+}
+
+message PullModelRequest {
+  string name = 1;
+}
+
+message PullProgress {
+  string status = 1;
+  int64 completed = 2;
+  int64 total = 3;
+  float percent = 4;
+}
