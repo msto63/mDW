@@ -2,10 +2,10 @@
 
 ## Konzept: Automatische Prompt-Analyse und iterative Agent-Verarbeitung
 
-**Version:** 1.0
-**Datum:** 2025-12-10
+**Version:** 2.0
+**Datum:** 2025-12-11
 **Autor:** Mike Stoffels mit Claude
-**Status:** Konzept
+**Status:** Konzept - Architekturentscheidung: Separater Service (Aristoteles)
 
 ---
 
@@ -21,251 +21,447 @@ Die Agentic Pipeline ist ein intelligentes System, das jeden eingehenden Prompt 
 User Prompt
      ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                     AGENTIC PIPELINE                            │
-│                                                                 │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐          │
-│  │   Intent    │ → │   Agent     │ → │  Enrichment │ → ...    │
-│  │  Analyzer   │   │  Selector   │   │    Stage    │          │
-│  └─────────────┘   └─────────────┘   └─────────────┘          │
-│         ↓                ↓                 ↓                   │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │              Processing Context (State)                  │  │
-│  │  • Intent: web_search | task_decomposition | direct_llm │  │
-│  │  • Enrichments: Fakten, Kontext, Recherche-Ergebnisse   │  │
-│  │  • Routing: Ziel-Agent(en), Pipeline-Konfiguration      │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                                                                 │
+│                  ARISTOTELES SERVICE (NEU)                       │
+│                     Port: 9160 (gRPC)                            │
+│                                                                  │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐           │
+│  │   Intent    │ → │   Agent     │ → │  Enrichment │ → ...     │
+│  │  Analyzer   │   │  Selector   │   │    Stage    │           │
+│  └─────────────┘   └─────────────┘   └─────────────┘           │
+│         ↓                ↓                 ↓                    │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              Pipeline Context (State)                    │   │
+│  │  • Intent: web_search | task_decomposition | direct_llm │   │
+│  │  • Enrichments: Fakten, Kontext, Recherche-Ergebnisse   │   │
+│  │  • Routing: Ziel-Agent(en), Pipeline-Konfiguration      │   │
+│  │  • Iteration: Schleifenkontrolle, Qualitätsschwellen    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                  │
 └─────────────────────────────────────────────────────────────────┘
      ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                    EXECUTION LAYER                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│  │   Direct    │  │    Agent    │  │   Multi-    │            │
-│  │    LLM      │  │  Execution  │  │   Agent     │            │
-│  │  (Turing)   │  │  (Leibniz)  │  │   Orch.     │            │
-│  └─────────────┘  └─────────────┘  └─────────────┘            │
+│                    EXECUTION LAYER                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │   Direct    │  │    Agent    │  │   Multi-    │             │
+│  │    LLM      │  │  Execution  │  │   Agent     │             │
+│  │  (Turing)   │  │  (Leibniz)  │  │   Orch.     │             │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+└─────────────────────────────────────────────────────────────────┘
+     ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  PLATON (Policy Enforcement) - Optional für Post-Processing     │
 └─────────────────────────────────────────────────────────────────┘
      ↓
 Final Response
 ```
 
-### 1.3 Abgrenzung zu Multi-Agent Orchestration
+### 1.3 Abgrenzung der Services
 
-| Aspekt | Agentic Pipeline | Multi-Agent Orchestration |
-|--------|------------------|---------------------------|
-| **Fokus** | Prompt-Routing & Pre-Processing | Task-Ausführung & Koordination |
-| **Wann** | VOR der eigentlichen Verarbeitung | WÄHREND der Verarbeitung |
-| **Ziel** | Beste Strategie wählen | Komplexe Aufgaben lösen |
-| **Output** | Routing-Entscheidung + angereicherter Prompt | Fertiges Ergebnis |
+| Service | Verantwortlichkeit | Fokus |
+|---------|-------------------|-------|
+| **Aristoteles** (NEU) | Intelligentes Routing & Orchestrierung | WAS soll passieren |
+| **Platon** | Policy-Enforcement (PII, Safety) | WIE es sicher passiert |
+| **Leibniz** | Agent-Ausführung | Agenten führen Tasks aus |
+| **Turing** | LLM-Kommunikation | Modell-Inferenz |
 
-Die Agentic Pipeline ist der **Eintrittspunkt**, der entscheidet, OB Multi-Agent Orchestration überhaupt nötig ist.
+### 1.4 Warum ein separater Service?
 
----
+**Architekturprinzipien:**
 
-## 2. Architektur-Optionen
+1. **Single Responsibility**: Platon = Policies, Aristoteles = Routing/Orchestrierung
+2. **Iterative Schleifen**: Verfeinerungsloops passen nicht in lineare Handler-Chains
+3. **LLM-Abhängigkeit**: Intent-Analyse braucht selbst LLM-Aufrufe - gehört nicht in Policy-Service
+4. **Zukunftssicherheit**: Multi-Agent-Orchestrierung, parallele Ausführung, A/B-Testing
 
-### 2.1 Option A: Platon-Erweiterung (Empfohlen)
+**Vergleich der Optionen:**
 
-Platon bietet bereits eine Handler-Chain mit Pre/Post-Processing. Die Agentic Pipeline kann als **spezialisierte Handler** in diese bestehende Infrastruktur integriert werden.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      PLATON SERVICE                             │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                   PRE-PROCESSING CHAIN                   │   │
-│  │                                                          │   │
-│  │  Priority 10:  ┌──────────────────────────────────────┐ │   │
-│  │                │  IntentAnalyzerHandler               │ │   │
-│  │                │  - LLM-basierte Intent-Erkennung     │ │   │
-│  │                │  - Setzt ctx.State["intent"]         │ │   │
-│  │                └──────────────────────────────────────┘ │   │
-│  │                              ↓                          │   │
-│  │  Priority 20:  ┌──────────────────────────────────────┐ │   │
-│  │                │  AgentSelectorHandler                │ │   │
-│  │                │  - Wählt passende Agenten            │ │   │
-│  │                │  - Setzt ctx.State["target_agents"]  │ │   │
-│  │                └──────────────────────────────────────┘ │   │
-│  │                              ↓                          │   │
-│  │  Priority 30:  ┌──────────────────────────────────────┐ │   │
-│  │                │  EnrichmentHandler                   │ │   │
-│  │                │  - Web-Recherche bei Bedarf          │ │   │
-│  │                │  - Kontext-Anreicherung              │ │   │
-│  │                │  - Modifiziert ctx.Prompt            │ │   │
-│  │                └──────────────────────────────────────┘ │   │
-│  │                              ↓                          │   │
-│  │  Priority 100: ┌──────────────────────────────────────┐ │   │
-│  │                │  PolicyHandler (PII, Safety)         │ │   │
-│  │                └──────────────────────────────────────┘ │   │
-│  │                              ↓                          │   │
-│  │  Priority 1000:┌──────────────────────────────────────┐ │   │
-│  │                │  AuditHandler                        │ │   │
-│  │                └──────────────────────────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              ↓                                  │
-│                    ProcessingContext mit                        │
-│                    Intent + Agents + Enrichments                │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Vorteile:**
-- Nutzt bestehende Infrastruktur (Chain-of-Responsibility)
-- ProcessingContext für State-Sharing bereits vorhanden
-- Audit-Trail automatisch integriert
-- Kein neuer Service nötig
-- Platon-Client in Leibniz bereits implementiert
-
-**Nachteile:**
-- Platon wird komplexer
-- Iterative Agent-Schleifen nicht direkt unterstützt
-
-### 2.2 Option B: Separater Orchestrator-Service
-
-Ein neuer Service **Aristoteles** (oder ähnlich) als dedizierter Pipeline-Orchestrator.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                  ARISTOTELES SERVICE (NEU)                      │
-│                     Port: 9160 (gRPC)                           │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                   PIPELINE ENGINE                        │   │
-│  │                                                          │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐        │   │
-│  │  │  Intent    │→ │  Strategy  │→ │  Enrichment│→ ...   │   │
-│  │  │  Analyzer  │  │  Selector  │  │  Loop      │        │   │
-│  │  └────────────┘  └────────────┘  └────────────┘        │   │
-│  │                                                          │   │
-│  │  Features:                                               │   │
-│  │  • Iterative Agent-Schleifen                            │   │
-│  │  • Konditionelle Verzweigungen                          │   │
-│  │  • Parallele Agent-Ausführung                           │   │
-│  │  • Qualitäts-Checkpoints                                │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              ↓                                  │
-│  Kommuniziert mit: Platon (Policies), Leibniz (Agents),        │
-│                    Turing (LLM), Babbage (NLP)                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Vorteile:**
-- Maximale Flexibilität
-- Klare Trennung der Verantwortlichkeiten
-- Eigene Optimierung möglich
-- Iterative Loops native unterstützt
-
-**Nachteile:**
-- Neuer Service = mehr Komplexität
-- Zusätzlicher Netzwerk-Hop
-- Mehr Code zu maintainen
-
-### 2.3 Option C: Hybrid-Ansatz
-
-Kombination: Einfache Fälle via Platon-Handler, komplexe via Orchestrator.
-
-```
-User Prompt
-     ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  PLATON: IntentAnalyzerHandler (Priority 10)                    │
-│  → Schnelle Intent-Erkennung                                    │
-│  → Entscheidet: simple vs. complex                              │
-└─────────────────────────────────────────────────────────────────┘
-     ↓                                    ↓
-┌─────────────────┐              ┌─────────────────────────────┐
-│  SIMPLE PATH    │              │  COMPLEX PATH               │
-│  (direct_llm)   │              │  (multi_agent, iterative)   │
-│                 │              │                              │
-│  Platon →       │              │  Aristoteles →               │
-│  Turing         │              │  Agent-Loop →                │
-│                 │              │  Turing                      │
-└─────────────────┘              └─────────────────────────────┘
-```
-
-**Empfehlung:** Start mit Option A (Platon-Erweiterung), später Option C bei Bedarf.
+| Kriterium | Platon-Erweiterung | Separater Service |
+|-----------|-------------------|-------------------|
+| Komplexität initial | Niedrig | Mittel |
+| Wartbarkeit langfristig | Schwierig | Einfach |
+| Iterative Loops | Schwierig | Native |
+| Parallele Agents | Nicht möglich | Native |
+| Unabhängige Skalierung | Nein | Ja |
+| Klare Verantwortlichkeit | Vermischt | Klar getrennt |
 
 ---
 
-## 3. Iterative Agent-Pipeline
+## 2. Aristoteles Service - Architektur
 
-### 3.1 Konzept: Prompt-Verfeinerungsschleife
-
-Ein Prompt kann mehrfach durch Agenten laufen, bis er "fertig" ist:
+### 2.1 Service-Überblick
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                 ITERATIVE REFINEMENT LOOP                       │
-│                                                                 │
-│      ┌──────────────────────────────────────────────────┐      │
-│      │                                                   │      │
-│      ↓                                                   │      │
-│  ┌────────┐    ┌────────────┐    ┌──────────┐    ┌─────┴────┐ │
-│  │ Prompt │ →  │  Agent A   │ →  │ Evaluate │ →  │ Fertig?  │ │
-│  │        │    │ (Analyze)  │    │ Quality  │    │          │ │
-│  └────────┘    └────────────┘    └──────────┘    └────┬─────┘ │
-│                                                        │       │
-│                                         Nein ←────────┤       │
-│                                                        │       │
-│                                         Ja ───────────→ Exit  │
-│                                                                 │
+│                    ARISTOTELES SERVICE                           │
+│                     Port: 9160 (gRPC)                            │
+│                     Port: 9161 (HTTP/REST)                       │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                   PIPELINE ENGINE                        │    │
+│  │                                                          │    │
+│  │  ┌────────────┐                                         │    │
+│  │  │  Intent    │ → Schnelle LLM-basierte Klassifikation  │    │
+│  │  │  Analyzer  │   (llama3.2:3b für minimale Latenz)     │    │
+│  │  └────────────┘                                         │    │
+│  │        ↓                                                │    │
+│  │  ┌────────────┐                                         │    │
+│  │  │  Strategy  │ → Wählt Verarbeitungsstrategie          │    │
+│  │  │  Selector  │   (direct, agent, multi-agent)          │    │
+│  │  └────────────┘                                         │    │
+│  │        ↓                                                │    │
+│  │  ┌────────────┐                                         │    │
+│  │  │ Enrichment │ → Web-Recherche, RAG, Fakten-Check      │    │
+│  │  │   Loop     │   (iterativ bis Qualität erreicht)      │    │
+│  │  └────────────┘                                         │    │
+│  │        ↓                                                │    │
+│  │  ┌────────────┐                                         │    │
+│  │  │  Quality   │ → Evaluiert Anreicherungs-Qualität      │    │
+│  │  │ Evaluator  │   (Entscheidet: weiter oder fertig)     │    │
+│  │  └────────────┘                                         │    │
+│  │        ↓                                                │    │
+│  │  ┌────────────┐                                         │    │
+│  │  │  Router    │ → Leitet an Turing/Leibniz/Multi-Agent  │    │
+│  │  │            │   mit angereichertem Prompt             │    │
+│  │  └────────────┘                                         │    │
+│  │                                                          │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                   SERVICE CLIENTS                        │    │
+│  │  • Turing (LLM) - für Intent-Analyse & finale Antwort   │    │
+│  │  • Leibniz (Agents) - für spezialisierte Agenten        │    │
+│  │  • Platon (Policy) - für PII/Safety-Checks              │    │
+│  │  • Hypatia (RAG) - für Wissensabruf                     │    │
+│  │  • Babbage (NLP) - für Textanalyse                      │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 Beispiel: Web-Recherche mit Verfeinerung
+### 2.2 Verzeichnisstruktur
 
 ```
-User: "Was sind die besten Go-Web-Frameworks 2025?"
-
-Iteration 1:
-├─ IntentAnalyzer: intent=web_research, confidence=0.95
-├─ AgentSelector: agents=[web-researcher]
-├─ Web-Researcher führt Suche durch
-├─ Evaluator: "Ergebnisse vorhanden, aber unstrukturiert"
-└─ Entscheidung: Weiter verfeinern
-
-Iteration 2:
-├─ Agent: task-planner
-├─ Task-Planner strukturiert die Recherche-Ergebnisse
-├─ Evaluator: "Gut strukturiert, bereit für LLM"
-└─ Entscheidung: An Turing übergeben
-
-Final:
-├─ Angereicherter Prompt an Turing
-├─ Prompt enthält: Original + Recherche-Daten + Struktur
-└─ Turing generiert finale Antwort
+internal/aristoteles/
+├── server/
+│   └── server.go              # gRPC Server
+├── service/
+│   └── service.go             # Business Logic
+├── pipeline/
+│   ├── engine.go              # Pipeline-Engine
+│   ├── context.go             # Pipeline-Context mit State
+│   └── stages.go              # Stage-Definitionen
+├── intent/
+│   ├── analyzer.go            # Intent-Analyse via LLM
+│   ├── classifier.go          # Intent-Klassifikation
+│   └── prompts.go             # LLM-Prompts für Analyse
+├── strategy/
+│   ├── selector.go            # Strategie-Auswahl
+│   └── types.go               # Strategie-Typen
+├── enrichment/
+│   ├── enricher.go            # Anreicherungs-Koordinator
+│   ├── web.go                 # Web-Recherche
+│   ├── rag.go                 # RAG-Integration
+│   └── facts.go               # Fakten-Extraktion
+├── quality/
+│   ├── evaluator.go           # Qualitäts-Bewertung
+│   └── thresholds.go          # Schwellenwerte
+├── router/
+│   └── router.go              # Service-Routing
+└── clients/
+    ├── turing.go              # Turing-Client
+    ├── leibniz.go             # Leibniz-Client
+    ├── platon.go              # Platon-Client
+    └── hypatia.go             # Hypatia-Client
 ```
 
-### 3.3 Processing Context State
+### 2.3 gRPC API
 
-```go
-type PipelineState struct {
-    // Intent-Analyse
-    Intent          string            // "web_research", "task_decomposition", etc.
-    IntentConfidence float64          // 0.0 - 1.0
-    IntentReasoning  string           // Begründung der Entscheidung
+```protobuf
+// api/proto/aristoteles.proto
 
-    // Routing
-    TargetAgents    []string          // Ausgewählte Agenten
-    TargetService   string            // "turing", "leibniz", "multi_agent"
+syntax = "proto3";
+package aristoteles;
+option go_package = "github.com/msto63/mDW/api/gen/aristoteles";
 
-    // Anreicherungen
-    Enrichments     []Enrichment      // Web-Recherche, Fakten, etc.
-    ModifiedPrompt  string            // Angereicherter Prompt
+service AristotelesService {
+    // Hauptmethode: Verarbeitet einen Prompt durch die Pipeline
+    rpc Process(ProcessRequest) returns (ProcessResponse);
 
-    // Iteration Control
-    Iteration       int               // Aktuelle Iteration
-    MaxIterations   int               // Limit
-    QualityScore    float64           // Aktuelle Qualität
-    QualityThreshold float64          // Mindestqualität
+    // Streaming-Version für Echtzeit-Feedback
+    rpc ProcessStream(ProcessRequest) returns (stream ProcessEvent);
 
-    // Audit
-    StepLog         []PipelineStep    // Alle durchlaufenen Schritte
+    // Nur Intent-Analyse (ohne Ausführung)
+    rpc AnalyzeIntent(IntentRequest) returns (IntentResponse);
+
+    // Pipeline-Status und Metriken
+    rpc GetPipelineStatus(StatusRequest) returns (StatusResponse);
+
+    // Health Check
+    rpc Health(HealthRequest) returns (HealthResponse);
 }
 
-type Enrichment struct {
-    Source    string            // "web_search", "knowledge_base", etc.
-    Content   string            // Angereicherte Daten
-    Metadata  map[string]string // Zusätzliche Infos
+message ProcessRequest {
+    string request_id = 1;
+    string prompt = 2;
+    string conversation_id = 3;      // Für Kontext-Tracking
+    map<string, string> metadata = 4;
+    ProcessOptions options = 5;
+}
+
+message ProcessOptions {
+    bool skip_intent_analysis = 1;   // Direkter LLM-Aufruf
+    string force_intent = 2;         // Intent überschreiben
+    repeated string force_agents = 3; // Agenten erzwingen
+    int32 max_iterations = 4;        // Max Verfeinerungs-Iterationen
+    float quality_threshold = 5;     // Mindest-Qualität (0.0-1.0)
+    bool enable_web_search = 6;      // Web-Recherche erlauben
+    bool enable_rag = 7;             // RAG-Suche erlauben
+    string preferred_model = 8;      // Bevorzugtes LLM-Modell
+}
+
+message ProcessResponse {
+    string request_id = 1;
+    string response = 2;             // Finale Antwort
+    IntentAnalysis intent = 3;       // Intent-Analyse-Ergebnis
+    RoutingDecision routing = 4;     // Routing-Entscheidung
+    repeated Enrichment enrichments = 5; // Anreicherungen
+    PipelineMetrics metrics = 6;     // Performance-Metriken
+    repeated PipelineStep steps = 7; // Alle Pipeline-Schritte
+}
+
+message ProcessEvent {
+    string event_type = 1;           // "intent", "enrichment", "routing", "response"
+    string stage = 2;                // Aktuelle Pipeline-Stage
+    string message = 3;              // Status-Nachricht
+    map<string, string> data = 4;    // Event-spezifische Daten
+    float progress = 5;              // Fortschritt (0.0-1.0)
+}
+
+message IntentAnalysis {
+    string intent = 1;               // direct_llm, web_research, etc.
+    float confidence = 2;            // Konfidenz (0.0-1.0)
+    string reasoning = 3;            // Begründung
+    repeated string suggested_agents = 4;
+    bool needs_enrichment = 5;
+    string enrichment_type = 6;      // web_search, knowledge_base, none
+}
+
+message RoutingDecision {
+    string target_service = 1;       // turing, leibniz, multi_agent
+    repeated string agents = 2;      // Gewählte Agenten
+    string model = 3;                // Gewähltes LLM-Modell
+    string enriched_prompt = 4;      // Angereicherter Prompt
+}
+
+message Enrichment {
+    string source = 1;               // web_search, rag, facts
+    string content = 2;              // Angereicherte Daten
+    map<string, string> metadata = 3;
+    float relevance_score = 4;       // Relevanz (0.0-1.0)
+}
+
+message PipelineStep {
+    string stage = 1;
+    string action = 2;
+    int64 duration_ms = 3;
+    bool success = 4;
+    string error = 5;
+    map<string, string> details = 6;
+}
+
+message PipelineMetrics {
+    int64 total_duration_ms = 1;
+    int32 iterations = 2;
+    float final_quality_score = 3;
+    int32 llm_calls = 4;
+    int32 agent_calls = 5;
+}
+```
+
+---
+
+## 3. Pipeline-Engine
+
+### 3.1 Pipeline-Stages
+
+```go
+// internal/aristoteles/pipeline/engine.go
+
+type PipelineEngine struct {
+    stages     []Stage
+    clients    *Clients
+    config     Config
+    logger     *logging.Logger
+    metrics    *metrics.Collector
+}
+
+type Stage interface {
+    Name() string
+    Process(ctx *PipelineContext) error
+    ShouldRun(ctx *PipelineContext) bool
+}
+
+// Pipeline-Stages in Reihenfolge
+var DefaultStages = []Stage{
+    &IntentAnalyzerStage{},      // 1. Intent erkennen
+    &StrategySelectorStage{},    // 2. Strategie wählen
+    &EnrichmentStage{},          // 3. Anreichern (iterativ)
+    &QualityEvaluatorStage{},    // 4. Qualität prüfen
+    &PolicyCheckStage{},         // 5. Policies (via Platon)
+    &RouterStage{},              // 6. Routing & Ausführung
+}
+
+func (e *PipelineEngine) Process(ctx context.Context, req *ProcessRequest) (*ProcessResponse, error) {
+    pctx := NewPipelineContext(ctx, req)
+
+    for _, stage := range e.stages {
+        if !stage.ShouldRun(pctx) {
+            continue
+        }
+
+        start := time.Now()
+        err := stage.Process(pctx)
+        duration := time.Since(start)
+
+        pctx.AddStep(PipelineStep{
+            Stage:      stage.Name(),
+            DurationMs: duration.Milliseconds(),
+            Success:    err == nil,
+            Error:      errorString(err),
+        })
+
+        if err != nil {
+            return nil, fmt.Errorf("stage %s failed: %w", stage.Name(), err)
+        }
+
+        // Prüfe ob Pipeline früh beendet werden soll
+        if pctx.ShouldTerminate() {
+            break
+        }
+    }
+
+    return pctx.ToResponse(), nil
+}
+```
+
+### 3.2 Pipeline-Context
+
+```go
+// internal/aristoteles/pipeline/context.go
+
+type PipelineContext struct {
+    ctx           context.Context
+    requestID     string
+    originalPrompt string
+    currentPrompt  string
+
+    // Intent-Analyse
+    Intent          IntentAnalysis
+
+    // Routing
+    TargetService   string
+    TargetAgents    []string
+    TargetModel     string
+
+    // Anreicherungen
+    Enrichments     []Enrichment
+
+    // Iteration Control
+    Iteration       int
+    MaxIterations   int
+    QualityScore    float64
+    QualityThreshold float64
+
+    // Ausführungsergebnis
+    Response        string
+
+    // Audit
+    Steps           []PipelineStep
+
+    // Flags
+    terminate       bool
+    skipEnrichment  bool
+}
+
+func (c *PipelineContext) ShouldIterate() bool {
+    return c.Iteration < c.MaxIterations &&
+           c.QualityScore < c.QualityThreshold
+}
+
+func (c *PipelineContext) EnrichPrompt(enrichment Enrichment) {
+    c.Enrichments = append(c.Enrichments, enrichment)
+    c.currentPrompt = c.buildEnrichedPrompt()
+}
+
+func (c *PipelineContext) buildEnrichedPrompt() string {
+    if len(c.Enrichments) == 0 {
+        return c.originalPrompt
+    }
+
+    var sb strings.Builder
+    sb.WriteString("KONTEXT (aus Recherche):\n")
+    for _, e := range c.Enrichments {
+        sb.WriteString(fmt.Sprintf("- [%s]: %s\n", e.Source, e.Content))
+    }
+    sb.WriteString("\nURSPRÜNGLICHE ANFRAGE:\n")
+    sb.WriteString(c.originalPrompt)
+
+    return sb.String()
+}
+```
+
+### 3.3 Iterative Verfeinerungsschleife
+
+```go
+// internal/aristoteles/pipeline/stages.go
+
+type EnrichmentStage struct {
+    webSearcher  *enrichment.WebSearcher
+    ragClient    *clients.HypatiaClient
+    factChecker  *enrichment.FactChecker
+}
+
+func (s *EnrichmentStage) Process(ctx *PipelineContext) error {
+    if !ctx.Intent.NeedsEnrichment {
+        return nil
+    }
+
+    // Iterative Anreicherung
+    for ctx.ShouldIterate() {
+        ctx.Iteration++
+
+        var enrichment Enrichment
+        var err error
+
+        switch ctx.Intent.EnrichmentType {
+        case "web_search":
+            enrichment, err = s.webSearcher.Search(ctx.ctx, ctx.currentPrompt)
+        case "knowledge_base":
+            enrichment, err = s.ragClient.Search(ctx.ctx, ctx.currentPrompt)
+        case "fact_check":
+            enrichment, err = s.factChecker.Check(ctx.ctx, ctx.currentPrompt)
+        }
+
+        if err != nil {
+            return err
+        }
+
+        ctx.EnrichPrompt(enrichment)
+
+        // Qualität evaluieren
+        quality, err := s.evaluateQuality(ctx)
+        if err != nil {
+            return err
+        }
+        ctx.QualityScore = quality
+
+        // Prüfe ob Qualität erreicht
+        if quality >= ctx.QualityThreshold {
+            break
+        }
+    }
+
+    return nil
 }
 ```
 
@@ -275,30 +471,40 @@ type Enrichment struct {
 
 ### 4.1 Intent-Kategorien
 
-| Intent | Beschreibung | Routing |
-|--------|--------------|---------|
-| `direct_llm` | Einfache Fragen, Erklärungen, Code-Generierung | Direkt zu Turing |
-| `web_research` | Aktuelle Informationen erforderlich | Web-Researcher Agent |
-| `task_decomposition` | Komplexe Aufgabe zerlegen | Task-Planner Agent |
-| `code_analysis` | Code-Review, Debugging | Code-Reviewer Agent |
-| `knowledge_retrieval` | Aus Wissensdatenbank abrufen | Hypatia (RAG) |
-| `multi_agent` | Mehrere Agenten koordiniert | Multi-Agent Orchestration |
+| Intent | Beschreibung | Routing | Modell |
+|--------|--------------|---------|--------|
+| `direct_llm` | Einfache Fragen, Erklärungen | Direkt zu Turing | Default |
+| `web_research` | Aktuelle Informationen | Web-Researcher Agent | llama3.2:8b |
+| `code_generation` | Code schreiben | Code-Writer Agent | qwen2.5-coder:7b |
+| `code_analysis` | Code-Review, Debugging | Code-Reviewer Agent | qwen2.5-coder:7b |
+| `task_decomposition` | Komplexe Aufgabe zerlegen | Task-Planner Agent | deepseek-r1:7b |
+| `knowledge_retrieval` | Aus Wissensdatenbank | Hypatia (RAG) | Default |
+| `multi_agent` | Mehrere Agenten koordiniert | Multi-Agent Orch. | Variabel |
 
 ### 4.2 LLM-basierte Intent-Erkennung
 
 ```go
-const intentAnalysisPrompt = `Du bist ein Intent-Klassifikator für ein KI-System.
+// internal/aristoteles/intent/analyzer.go
+
+type IntentAnalyzer struct {
+    turingClient *clients.TuringClient
+    model        string // llama3.2:3b für schnelle Klassifikation
+    logger       *logging.Logger
+}
+
+const intentPrompt = `Du bist ein Intent-Klassifikator für ein KI-System.
 Analysiere die folgende Benutzeranfrage und bestimme die beste Verarbeitungsstrategie.
 
-Verfügbare Strategien:
-1. direct_llm: Allgemeine Fragen, Erklärungen, Code-Generierung ohne externe Daten
-2. web_research: Benötigt aktuelle Informationen aus dem Internet (News, Preise, Wetter, aktuelle Ereignisse)
-3. task_decomposition: Komplexe Aufgabe die in Teilschritte zerlegt werden muss
-4. code_analysis: Analyse, Review oder Debugging von bestehendem Code
-5. knowledge_retrieval: Informationen aus einer Wissensdatenbank abrufen
-6. multi_agent: Benötigt mehrere spezialisierte Agenten
+VERFÜGBARE STRATEGIEN:
+1. direct_llm: Allgemeine Fragen, Erklärungen, Konversation ohne externe Daten
+2. web_research: Benötigt aktuelle Informationen (News, Preise, Wetter, Ereignisse)
+3. code_generation: Neuen Code schreiben, Implementierung erstellen
+4. code_analysis: Bestehenden Code analysieren, debuggen, reviewen
+5. task_decomposition: Komplexe Aufgabe in Teilschritte zerlegen
+6. knowledge_retrieval: Informationen aus Wissensdatenbank abrufen
+7. multi_agent: Benötigt mehrere spezialisierte Agenten
 
-Benutzeranfrage:
+BENUTZERANFRAGE:
 """
 {{.Prompt}}
 """
@@ -307,11 +513,39 @@ Antworte NUR im folgenden JSON-Format:
 {
   "intent": "<strategy>",
   "confidence": <0.0-1.0>,
-  "reasoning": "<kurze Begründung>",
+  "reasoning": "<kurze Begründung auf Deutsch>",
   "suggested_agents": ["<agent_id>", ...],
   "needs_enrichment": <true/false>,
-  "enrichment_type": "<web_search|knowledge_base|none>"
+  "enrichment_type": "<web_search|knowledge_base|fact_check|none>"
 }`
+
+func (a *IntentAnalyzer) Analyze(ctx context.Context, prompt string) (*IntentAnalysis, error) {
+    // Prompt für Intent-Analyse erstellen
+    analysisPrompt := strings.Replace(intentPrompt, "{{.Prompt}}", prompt, 1)
+
+    // Schnelle LLM-Abfrage mit kleinem Modell
+    response, err := a.turingClient.Chat(ctx, a.model, []Message{
+        {Role: "user", Content: analysisPrompt},
+    })
+    if err != nil {
+        return nil, fmt.Errorf("intent analysis failed: %w", err)
+    }
+
+    // JSON parsen
+    var analysis IntentAnalysis
+    if err := json.Unmarshal([]byte(response), &analysis); err != nil {
+        // Fallback zu direct_llm bei Parse-Fehlern
+        a.logger.Warn("Failed to parse intent analysis, falling back to direct_llm",
+            "error", err, "response", response)
+        return &IntentAnalysis{
+            Intent:     "direct_llm",
+            Confidence: 0.5,
+            Reasoning:  "Fallback wegen Parse-Fehler",
+        }, nil
+    }
+
+    return &analysis, nil
+}
 ```
 
 ### 4.3 Beispiel-Klassifikationen
@@ -323,29 +557,41 @@ Prompt: "Erkläre mir Rekursion in Python"
     "confidence": 0.95,
     "reasoning": "Allgemeine Programmiererklärung ohne externe Daten",
     "suggested_agents": [],
-    "needs_enrichment": false
+    "needs_enrichment": false,
+    "enrichment_type": "none"
   }
 
-Prompt: "Was sind die aktuellen Nachrichten zu KI-Regulierung?"
+Prompt: "Was sind die aktuellen Nachrichten zu KI-Regulierung in der EU?"
 → {
     "intent": "web_research",
     "confidence": 0.92,
-    "reasoning": "Fragt nach aktuellen Informationen (Nachrichten)",
+    "reasoning": "Fragt nach aktuellen Informationen (Nachrichten, EU)",
     "suggested_agents": ["web-researcher"],
     "needs_enrichment": true,
     "enrichment_type": "web_search"
   }
 
-Prompt: "Erstelle eine vollständige REST-API mit Auth und Tests"
+Prompt: "Schreibe eine Go-Funktion für Fibonacci mit Memoization"
+→ {
+    "intent": "code_generation",
+    "confidence": 0.94,
+    "reasoning": "Explizite Code-Erstellung angefordert",
+    "suggested_agents": ["code-writer"],
+    "needs_enrichment": false,
+    "enrichment_type": "none"
+  }
+
+Prompt: "Erstelle eine REST-API mit Auth, Datenbank und Tests"
 → {
     "intent": "task_decomposition",
     "confidence": 0.88,
     "reasoning": "Komplexe Aufgabe mit mehreren Komponenten",
     "suggested_agents": ["task-planner"],
-    "needs_enrichment": false
+    "needs_enrichment": false,
+    "enrichment_type": "none"
   }
 
-Prompt: "Recherchiere Go-Frameworks und erstelle einen Vergleichsbericht"
+Prompt: "Recherchiere Go-Frameworks 2025 und erstelle einen Vergleichsbericht"
 → {
     "intent": "multi_agent",
     "confidence": 0.85,
@@ -360,149 +606,103 @@ Prompt: "Recherchiere Go-Frameworks und erstelle einen Vergleichsbericht"
 
 ## 5. Integration in mDW
 
-### 5.1 Request-Flow mit Agentic Pipeline
+### 5.1 Gesamtarchitektur mit Aristoteles
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                       NEUER REQUEST FLOW                         │
+┌─────────────────────────────────────────────────────────────────┐
+│                      mDW ARCHITEKTUR                             │
 │                                                                  │
-│  Client                                                          │
-│    ↓                                                             │
-│  Kant API Gateway (:8080)                                        │
-│    │                                                             │
-│    ├─ POST /api/v1/chat                                         │
-│    │   ├─ [NEU] Sende an Platon.ProcessPre() mit Pipeline-ID    │
-│    │   │        "agentic-pipeline"                               │
-│    │   │                                                         │
-│    │   │  ┌────────────────────────────────────────────────┐    │
-│    │   │  │ PLATON AGENTIC PIPELINE                        │    │
-│    │   │  │                                                 │    │
-│    │   │  │ 1. IntentAnalyzerHandler                       │    │
-│    │   │  │    → Erkennt Intent via LLM                    │    │
-│    │   │  │    → ctx.State["intent"] = "web_research"      │    │
-│    │   │  │                                                 │    │
-│    │   │  │ 2. AgentSelectorHandler                        │    │
-│    │   │  │    → Wählt Agenten basierend auf Intent        │    │
-│    │   │  │    → ctx.State["agents"] = ["web-researcher"]  │    │
-│    │   │  │                                                 │    │
-│    │   │  │ 3. EnrichmentHandler                           │    │
-│    │   │  │    → Führt Web-Recherche durch (wenn nötig)    │    │
-│    │   │  │    → Reichert Prompt mit Ergebnissen an        │    │
-│    │   │  │                                                 │    │
-│    │   │  │ 4. PolicyHandler                               │    │
-│    │   │  │    → PII-Check, Safety-Check                   │    │
-│    │   │  │                                                 │    │
-│    │   │  │ Return: ProcessingContext mit Routing-Info     │    │
-│    │   │  └────────────────────────────────────────────────┘    │
-│    │   │                                                         │
-│    │   ├─ [NEU] Lese Routing aus Response                       │
-│    │   │                                                         │
-│    │   └─ Route basierend auf ctx.State["target_service"]:      │
-│    │       ├─ "turing"  → Turing.Chat(enrichedPrompt)           │
-│    │       ├─ "leibniz" → Leibniz.Execute(agent, prompt)        │
-│    │       └─ "multi"   → MultiAgent.Orchestrate(agents, task)  │
-│    │                                                             │
-│    └─ Return Response                                            │
+│  ┌──────────┐                                                   │
+│  │  Client  │ (TUI, Web, CLI)                                   │
+│  └────┬─────┘                                                   │
+│       ↓                                                         │
+│  ┌──────────┐                                                   │
+│  │   Kant   │ API Gateway (:8080)                               │
+│  │          │ → Routet zu Aristoteles (wenn aktiviert)          │
+│  └────┬─────┘                                                   │
+│       ↓                                                         │
+│  ┌────────────────┐                                             │
+│  │  ARISTOTELES   │ Agentic Pipeline (:9160)                    │
+│  │                │ → Intent-Analyse                            │
+│  │                │ → Strategie-Auswahl                         │
+│  │                │ → Anreicherung                              │
+│  │                │ → Routing                                   │
+│  └───────┬────────┘                                             │
+│          │                                                      │
+│    ┌─────┼─────────────────────────────┐                       │
+│    ↓     ↓                             ↓                        │
+│  ┌─────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐                   │
+│  │Turing│ │ Leibniz │ │ Hypatia │ │ Platon  │                   │
+│  │(LLM) │ │(Agents) │ │  (RAG)  │ │(Policy) │                   │
+│  └─────┘ └─────────┘ └─────────┘ └─────────┘                   │
 │                                                                  │
-└──────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Neue Platon-Handler
+### 5.2 Request-Flow
 
-```go
-// internal/platon/handlers/intent.go
-type IntentAnalyzerHandler struct {
-    *BaseHandler
-    llmClient turing.TuringServiceClient
-    config    IntentAnalyzerConfig
-}
+```
+1. Client sendet Anfrage an Kant
+   POST /api/v1/chat { "message": "..." }
 
-func (h *IntentAnalyzerHandler) Process(ctx *chain.ProcessingContext) error {
-    // 1. Prompt an LLM senden für Intent-Analyse
-    analysis, err := h.analyzeIntent(ctx.Context(), ctx.Prompt)
-    if err != nil {
-        return err
-    }
+2. Kant prüft: Aristoteles aktiviert?
+   JA → Weiterleitung an Aristoteles
+   NEIN → Direkt an Turing
 
-    // 2. Ergebnis in Context speichern
-    ctx.SetState("intent", analysis.Intent)
-    ctx.SetState("intent_confidence", analysis.Confidence)
-    ctx.SetState("intent_reasoning", analysis.Reasoning)
-    ctx.SetState("suggested_agents", analysis.SuggestedAgents)
-    ctx.SetState("needs_enrichment", analysis.NeedsEnrichment)
+3. Aristoteles verarbeitet:
+   a) Intent-Analyse (llama3.2:3b, ~200ms)
+   b) Strategie-Auswahl
+   c) Ggf. Anreicherung (Web-Recherche, RAG)
+   d) Routing-Entscheidung
 
-    return nil
-}
+4. Aristoteles routet:
+   - direct_llm → Turing.Chat()
+   - code_* → Leibniz.Execute(code-writer/reviewer)
+   - web_research → Leibniz.Execute(web-researcher)
+   - multi_agent → Multi-Agent-Orchestrierung
 
-// internal/platon/handlers/enrichment.go
-type EnrichmentHandler struct {
-    *BaseHandler
-    webSearchClient websearch.Client
-    ragClient       hypatia.HypatiaServiceClient
-}
+5. Aristoteles sammelt Response
+   - Ggf. Post-Processing via Platon (PII-Filter)
+   - Metrics und Audit-Log
 
-func (h *EnrichmentHandler) Process(ctx *chain.ProcessingContext) error {
-    needsEnrichment, _ := ctx.GetState("needs_enrichment").(bool)
-    if !needsEnrichment {
-        return nil
-    }
-
-    enrichmentType, _ := ctx.GetState("enrichment_type").(string)
-
-    switch enrichmentType {
-    case "web_search":
-        results, err := h.webSearchClient.Search(ctx.Context(), ctx.Prompt, 5)
-        if err != nil {
-            return err
-        }
-        ctx.SetState("enrichments", results)
-        ctx.Prompt = h.enrichPrompt(ctx.Prompt, results)
-        ctx.MarkModified()
-
-    case "knowledge_base":
-        // RAG-Suche via Hypatia
-        // ...
-    }
-
-    return nil
-}
+6. Response zurück an Kant → Client
 ```
 
 ### 5.3 Kant-Integration
 
 ```go
-// internal/kant/handler/handler.go - handleChat() erweitern
+// internal/kant/handler/handler.go
 
 func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
-    // ... bestehender Code ...
+    // ... Request parsen ...
 
-    // NEU: Agentic Pipeline via Platon
-    if h.config.EnableAgenticPipeline {
-        preResp, err := h.clients.Platon.ProcessPre(ctx, &platonpb.ProcessRequest{
-            Prompt:     userMessage,
-            PipelineId: "agentic-pipeline",
-            Metadata:   map[string]string{"source": "chat"},
+    // Aristoteles-Integration
+    if h.config.EnableAristotle {
+        resp, err := h.clients.Aristoteles.Process(ctx, &aristotelespb.ProcessRequest{
+            RequestId: requestID,
+            Prompt:    userMessage,
+            Options: &aristotelespb.ProcessOptions{
+                EnableWebSearch: h.config.EnableWebSearch,
+                EnableRag:       h.config.EnableRAG,
+                MaxIterations:   h.config.MaxIterations,
+                QualityThreshold: h.config.QualityThreshold,
+            },
         })
-        if err != nil {
-            // Fallback zu direktem LLM-Aufruf
-            log.Warn("Agentic pipeline failed, falling back to direct LLM", "error", err)
-        } else {
-            // Routing basierend auf Pipeline-Ergebnis
-            targetService := preResp.Metadata["target_service"]
-            enrichedPrompt := preResp.ProcessedPrompt
 
-            switch targetService {
-            case "leibniz":
-                return h.routeToLeibniz(w, r, preResp)
-            case "multi_agent":
-                return h.routeToMultiAgent(w, r, preResp)
-            default:
-                userMessage = enrichedPrompt // Angereicherter Prompt
-            }
+        if err != nil {
+            // Fallback zu direktem Turing-Aufruf
+            h.logger.Warn("Aristoteles failed, falling back to Turing", "error", err)
+        } else {
+            // Aristoteles hat verarbeitet
+            return h.sendResponse(w, resp.Response, resp.Metrics)
         }
     }
 
-    // Bestehender Turing-Aufruf mit (evtl. angereichertem) Prompt
+    // Fallback: Direkter Turing-Aufruf
+    turingResp, err := h.clients.Turing.Chat(ctx, &turingpb.ChatRequest{
+        Model:    h.config.DefaultModel,
+        Messages: messages,
+    })
     // ...
 }
 ```
@@ -511,53 +711,65 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 
 ## 6. Konfiguration
 
-### 6.1 Pipeline-Definition
+### 6.1 config.toml
 
 ```toml
-# configs/config.toml
+# Aristoteles - Agentic Pipeline Service
+[aristoteles]
+host = "0.0.0.0"
+port = 9160
+http_port = 9161
 
-[platon.pipelines.agentic-pipeline]
-enabled = true
-description = "Intelligentes Prompt-Routing mit Agent-Anreicherung"
+# Pipeline-Einstellungen
+[aristoteles.pipeline]
+max_iterations = 3
+quality_threshold = 0.8
+enable_web_search = true
+enable_rag = true
+default_timeout = "30s"
 
-[[platon.pipelines.agentic-pipeline.handlers]]
-name = "intent-analyzer"
-priority = 10
-type = "pre"
-config = { model = "llama3.2:3b", timeout = "3s" }
+# Intent-Analyse
+[aristoteles.intent]
+model = "llama3.2:3b"        # Schnelles Modell für Klassifikation
+timeout = "3s"
+confidence_threshold = 0.7   # Mindest-Konfidenz
 
-[[platon.pipelines.agentic-pipeline.handlers]]
-name = "agent-selector"
-priority = 20
-type = "pre"
-config = { }
+# Strategie-Modelle (welches LLM für welchen Intent)
+[aristoteles.models]
+direct_llm = "llama3.2:8b"
+code_generation = "qwen2.5-coder:7b"
+code_analysis = "qwen2.5-coder:7b"
+task_decomposition = "deepseek-r1:7b"
+web_research = "llama3.2:8b"
 
-[[platon.pipelines.agentic-pipeline.handlers]]
-name = "enrichment"
-priority = 30
-type = "pre"
-config = { max_results = 5, enable_web_search = true }
+# Service-Verbindungen
+[aristoteles.services]
+turing_addr = "localhost:9200"
+leibniz_addr = "localhost:9140"
+platon_addr = "localhost:9130"
+hypatia_addr = "localhost:9220"
+babbage_addr = "localhost:9150"
 
-[[platon.pipelines.agentic-pipeline.handlers]]
-name = "policy-pii"
-priority = 100
-type = "both"
-
-[[platon.pipelines.agentic-pipeline.handlers]]
-name = "audit"
-priority = 1000
-type = "both"
-```
-
-### 6.2 Kant-Konfiguration
-
-```toml
+# Kant - API Gateway
 [kant]
 port = 8080
-enable_agentic_pipeline = true
-default_pipeline = "agentic-pipeline"
-fallback_on_error = true  # Bei Pipeline-Fehler direkt zu Turing
+enable_aristotle = true     # Aristoteles aktivieren
+fallback_on_error = true    # Bei Fehler zu Turing fallback
 ```
+
+### 6.2 Port-Konvention
+
+| Service | gRPC Port | HTTP Port | Beschreibung |
+|---------|-----------|-----------|--------------|
+| Kant | - | 8080 | API Gateway |
+| Russell | 9100 | 9101 | Service Discovery |
+| Bayes | 9120 | 9121 | Logging |
+| Platon | 9130 | 9131 | Pipeline/Policy |
+| Leibniz | 9140 | 9141 | Agentic AI |
+| Babbage | 9150 | 9151 | NLP |
+| **Aristoteles** | **9160** | **9161** | **Agentic Pipeline** |
+| Turing | 9200 | 9201 | LLM |
+| Hypatia | 9220 | 9221 | RAG |
 
 ---
 
@@ -567,21 +779,27 @@ fallback_on_error = true  # Bei Pipeline-Fehler direkt zu Turing
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  mDW Chat                                           llama3.2:8b │
+│  mDW Chat                                          llama3.2:8b  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  User: Was sind die aktuellen Nachrichten zu KI?               │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │ 🔍 Web-Recherche wird durchgeführt...                   │   │
-│  │    Intent: web_research (95% confidence)                │   │
-│  │    Agent: web-researcher                                │   │
+│  │ [Aristoteles] Verarbeite Anfrage...                      │   │
+│  │                                                          │   │
+│  │  1. Intent: web_research (92%)                          │   │
+│  │  2. Agent: web-researcher                               │   │
+│  │  3. Recherche läuft... ████████░░ 80%                   │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  Assistant: Basierend auf meiner aktuellen Recherche...        │
 │                                                                 │
+│  Quellen:                                                       │
+│  - heise.de: "EU AI Act tritt in Kraft..."                     │
+│  - golem.de: "Neue Regulierungen für KI..."                    │
+│                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
-│  > _                                                            │
+│  > _                                          [Aristoteles: ON] │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -591,171 +809,157 @@ fallback_on_error = true  # Bei Pipeline-Fehler direkt zu Turing
 |--------|-----------|
 | 💬 | Direct LLM (Standard-Chat) |
 | 🔍 | Web-Recherche aktiv |
-| 📋 | Aufgabenzerlegung aktiv |
-| 🔧 | Code-Analyse aktiv |
-| 🤖 | Multi-Agent aktiv |
+| 💻 | Code-Generierung |
+| 🔧 | Code-Analyse |
+| 📋 | Aufgabenzerlegung |
+| 📚 | Wissensabruf (RAG) |
+| 🤖 | Multi-Agent |
 
 ---
 
-## 8. Implementierungs-Roadmap
+## 8. Multi-LLM-Strategie
 
-### Phase 1: Foundation (MVP)
-- [ ] IntentAnalyzerHandler in Platon
-- [ ] Basis-Intent-Kategorien (direct_llm, web_research)
-- [ ] Kant-Integration für Pipeline-Aufruf
-- [ ] Einfaches UI-Feedback im ChatClient
+### 8.1 Modell-Zuweisung
 
-### Phase 2: Enrichment
-- [ ] EnrichmentHandler mit Web-Recherche
-- [ ] AgentSelectorHandler
-- [ ] Prompt-Anreicherung mit Recherche-Ergebnissen
-- [ ] RAG-Integration via Hypatia
-
-### Phase 3: Iteration
-- [ ] Iterative Verfeinerungsschleife
-- [ ] Qualitäts-Evaluation
-- [ ] Konfigurierbare Max-Iterationen
-- [ ] Multi-Agent Routing
-
-### Phase 4: Optimierung
-- [ ] Caching für Intent-Klassifikation
-- [ ] Parallele Agent-Ausführung
-- [ ] Performance-Metriken
-- [ ] A/B-Testing verschiedener Routing-Strategien
-
----
-
-## 9. Multi-LLM-Strategie: Spezialisierte Modelle pro Agent
-
-### 9.1 Ollama Multi-Modell-Fähigkeit
-
-Ollama unterstützt das gleichzeitige Laden mehrerer Modelle im VRAM:
-
-```bash
-# Konfiguration für Multi-Modell
-export OLLAMA_MAX_LOADED_MODELS=4      # Max. 4 Modelle gleichzeitig
-export OLLAMA_NUM_PARALLEL=4           # Parallele Requests pro Modell
-export OLLAMA_KEEP_ALIVE="10m"         # Modelle 10 Min im RAM halten
-```
-
-**Wichtig:** Neue Modelle müssen komplett in den verfügbaren VRAM passen. Bei unzureichendem VRAM wird teilweise auf CPU ausgelagert (Performance-Einbuße).
-
-### 9.2 Empfohlene Modelle pro Agent/Aufgabe
-
-| Agent | Modell | VRAM | Begründung |
-|-------|--------|------|------------|
-| **Intent-Analyzer** | `llama3.2:3b` | ~2GB | Schnell, für Klassifikation optimiert |
-| **Web-Researcher** | `llama3.2:8b` | ~5GB | Gute Zusammenfassung von Recherchen |
-| **Code-Writer** | `qwen2.5-coder:7b` | ~5GB | 88.4% HumanEval, 92+ Programmiersprachen |
-| **Code-Reviewer** | `qwen2.5-coder:7b` | ~5GB | Spezialisiert auf Code-Analyse |
-| **Task-Planner** | `deepseek-r1:7b` | ~5GB | Starkes logisches Reasoning |
-| **General Chat** | `llama3.2:8b` | ~5GB | Allrounder für Standard-Anfragen |
-
-### 9.3 VRAM-Planung
-
-**Beispiel: 24GB VRAM (RTX 3090/4090)**
-```
-llama3.2:3b    (Intent)     ~2GB
-llama3.2:8b    (General)    ~5GB
-qwen2.5-coder:7b (Coding)   ~5GB
-deepseek-r1:7b (Reasoning)  ~5GB
-─────────────────────────────────
-Total:                      ~17GB (7GB Reserve für KV-Cache)
-```
-
-**Beispiel: 12GB VRAM (RTX 3060/4070)**
-```
-llama3.2:3b    (Intent)     ~2GB
-llama3.2:8b    (General)    ~5GB
-─────────────────────────────────
-Total:                      ~7GB (5GB Reserve)
-# Coding-Modell wird bei Bedarf geladen (swap)
-```
-
-### 9.4 Turing-Integration: Model-per-Agent
+Die agent-spezifische Modellauswahl ist bereits in Leibniz implementiert (`ModelAwareLLMFunc`). Aristoteles nutzt diese Funktionalität:
 
 ```go
-// internal/turing/service/service.go
-
-// AgentModelMapping definiert welches LLM pro Agent genutzt wird
-var AgentModelMapping = map[string]string{
-    "intent-analyzer":  "llama3.2:3b",
-    "web-researcher":   "llama3.2:8b",
-    "code-writer":      "qwen2.5-coder:7b",
-    "code-reviewer":    "qwen2.5-coder:7b",
-    "task-planner":     "deepseek-r1:7b",
-    "default":          "llama3.2:8b",
-}
-
-// GetModelForAgent gibt das optimale Modell für einen Agenten zurück
-func GetModelForAgent(agentID string) string {
-    if model, ok := AgentModelMapping[agentID]; ok {
-        return model
+// Aristoteles setzt das Modell basierend auf Intent
+func (r *Router) selectModel(intent string) string {
+    switch intent {
+    case "code_generation", "code_analysis":
+        return "qwen2.5-coder:7b"
+    case "task_decomposition":
+        return "deepseek-r1:7b"
+    case "web_research":
+        return "llama3.2:8b"
+    default:
+        return "llama3.2:8b"
     }
-    return AgentModelMapping["default"]
+}
+
+// Weiterleitung an Leibniz mit Modell
+func (r *Router) routeToLeibniz(ctx *PipelineContext) error {
+    model := r.selectModel(ctx.Intent.Intent)
+
+    resp, err := r.leibnizClient.ExecuteWithAgent(ctx.ctx, &leibnizpb.ExecuteRequest{
+        AgentId: ctx.TargetAgents[0],
+        Message: ctx.currentPrompt,
+        Model:   model,  // Agent nutzt dieses Modell
+    })
+    // ...
 }
 ```
 
-### 9.5 Konfiguration in config.toml
+### 8.2 VRAM-Management
 
-```toml
-[turing.models]
-# Standard-Modell für unspezifische Anfragen
-default = "llama3.2:8b"
+Aristoteles berücksichtigt VRAM-Limits bei der Modell-Auswahl:
 
-# Agent-spezifische Modelle
-[turing.models.agents]
-intent-analyzer = "llama3.2:3b"
-web-researcher = "llama3.2:8b"
-code-writer = "qwen2.5-coder:7b"
-code-reviewer = "qwen2.5-coder:7b"
-task-planner = "deepseek-r1:7b"
+```go
+// Prüfe ob Modell geladen werden kann
+func (r *Router) canUseModel(model string) bool {
+    status, _ := r.turingClient.GetModelStatus(ctx)
 
-[turing.ollama]
-max_loaded_models = 4
-keep_alive = "10m"
-num_parallel = 4
+    // Wenn Modell bereits geladen → OK
+    if status.LoadedModels[model] {
+        return true
+    }
+
+    // Prüfe ob genug VRAM frei
+    modelSize := r.getModelSize(model)
+    return status.FreeVRAM >= modelSize
+}
 ```
 
-### 9.6 Dynamische Modell-Auswahl im Pipeline-Flow
+---
 
-```
-User: "Schreibe eine Go-Funktion für Fibonacci"
+## 9. Implementierungs-Roadmap
 
-1. Intent-Analyzer (llama3.2:3b - schnell)
-   → Intent: "code_generation"
-   → Agent: "code-writer"
+### Phase 1: Foundation (2 Wochen)
 
-2. Agent-Selector
-   → Liest Intent
-   → Wählt: code-writer mit qwen2.5-coder:7b
+- [ ] Aristoteles Service-Grundstruktur
+  - [ ] gRPC Server (`internal/aristoteles/server/`)
+  - [ ] Service-Grundgerüst (`internal/aristoteles/service/`)
+  - [ ] Proto-Definitionen (`api/proto/aristoteles.proto`)
+  - [ ] Health-Check und Russell-Registrierung
 
-3. Execution (via Leibniz → Turing)
-   → Turing.Chat(model="qwen2.5-coder:7b", prompt=...)
-   → Spezialisiertes Coding-LLM generiert optimalen Code
+- [ ] Pipeline-Engine Basis
+  - [ ] PipelineContext und State-Management
+  - [ ] Stage-Interface und Ausführung
+  - [ ] Basis-Metriken
 
-4. Response
-   → Hochwertiger Code dank spezialisiertem Modell
-```
+- [ ] Intent-Analyzer (MVP)
+  - [ ] LLM-basierte Klassifikation
+  - [ ] Basis-Intents: direct_llm, web_research, code_generation
+  - [ ] Turing-Client für Intent-Analyse
 
-### 9.7 Vorteile der Multi-LLM-Strategie
+### Phase 2: Routing & Integration (2 Wochen)
 
-1. **Optimale Qualität**: Jede Aufgabe nutzt das beste verfügbare Modell
-2. **Effizienz**: Kleine Modelle für einfache Tasks (Intent), große für komplexe
-3. **Kosten**: Lokale Ausführung, keine API-Kosten
-4. **Latenz**: Kleine Modelle für Klassifikation = schnelle Routing-Entscheidung
-5. **Spezialisierung**: Coding-Modelle übertreffen General-Purpose bei Code
+- [ ] Strategy-Selector
+  - [ ] Intent-zu-Strategie-Mapping
+  - [ ] Modell-Auswahl pro Intent
+
+- [ ] Router-Implementierung
+  - [ ] Turing-Client (Direct LLM)
+  - [ ] Leibniz-Client (Agents)
+  - [ ] Platon-Client (Policy-Checks)
+
+- [ ] Kant-Integration
+  - [ ] Aristoteles-Client in Kant
+  - [ ] Konfiguration enable_aristotle
+  - [ ] Fallback-Logik
+
+### Phase 3: Enrichment & Iteration (2 Wochen)
+
+- [ ] Enrichment-Stage
+  - [ ] Web-Recherche Integration
+  - [ ] RAG via Hypatia
+  - [ ] Prompt-Anreicherung
+
+- [ ] Iterative Verfeinerung
+  - [ ] Quality-Evaluator
+  - [ ] Schleifenlogik mit Abbruchbedingungen
+  - [ ] Max-Iterations-Limit
+
+- [ ] Multi-Agent Orchestrierung
+  - [ ] Parallele Agent-Ausführung
+  - [ ] Ergebnis-Aggregation
+
+### Phase 4: UI & Optimierung (1 Woche)
+
+- [ ] ChatClient TUI Integration
+  - [ ] Pipeline-Status-Anzeige
+  - [ ] Routing-Indikatoren
+  - [ ] Streaming-Events
+
+- [ ] Performance-Optimierung
+  - [ ] Intent-Caching
+  - [ ] Connection-Pooling
+  - [ ] Metriken und Monitoring
 
 ---
 
 ## 10. Zusammenfassung
 
-Die Agentic Pipeline erweitert mDW um intelligentes Prompt-Routing:
+### Architekturentscheidung
 
-1. **Automatische Intent-Erkennung** via LLM analysiert jeden Prompt
-2. **Dynamisches Routing** wählt die optimale Verarbeitungsstrategie
-3. **Prompt-Anreicherung** fügt relevante Informationen hinzu (Web-Recherche, RAG)
-4. **Iterative Verfeinerung** verbessert Prompts durch mehrere Agent-Durchläufe
-5. **Nahtlose Integration** in bestehende Platon-Pipeline-Infrastruktur
+**Aristoteles** wird als dedizierter Service für die Agentic Pipeline implementiert:
 
-Das System macht mDW "intelligent" - es versteht die Absicht des Nutzers und wählt automatisch den besten Weg zur Antwort.
+- **Klare Verantwortlichkeit**: Routing & Orchestrierung getrennt von Policies
+- **Native Iteration**: Verfeinerungsschleifen ohne Workarounds
+- **Zukunftssicher**: Multi-Agent, parallele Ausführung, A/B-Testing möglich
+- **Unabhängig skalierbar**: Kann bei Bedarf horizontal skaliert werden
+
+### Kernfunktionen
+
+1. **Intent-Analyse**: LLM-basierte Klassifikation mit llama3.2:3b (~200ms)
+2. **Strategie-Auswahl**: Automatische Modell- und Agent-Auswahl
+3. **Iterative Anreicherung**: Web-Recherche, RAG, Fakten-Check
+4. **Intelligentes Routing**: Zu Turing, Leibniz, oder Multi-Agent
+
+### Nächste Schritte
+
+1. Proto-Definition erstellen
+2. Service-Grundstruktur aufsetzen
+3. Intent-Analyzer implementieren
+4. Kant-Integration

@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	chatClientModel      string
-	chatClientTuringAddr string
+	chatClientModel          string
+	chatClientTuringAddr     string
+	chatClientAristotelesAddr string
 )
 
 var chatClientCmd = &cobra.Command{
@@ -52,12 +53,15 @@ func init() {
 		"LLM-Modell für den Chat")
 	chatClientCmd.Flags().StringVar(&chatClientTuringAddr, "turing-addr", "localhost:9200",
 		"Adresse des Turing-Service")
+	chatClientCmd.Flags().StringVar(&chatClientAristotelesAddr, "aristoteles-addr", "localhost:9160",
+		"Adresse des Aristoteles-Service")
 }
 
 func runChatClient(cmd *cobra.Command, args []string) error {
 	cfg := chatclient.Config{
-		TuringAddr: chatClientTuringAddr,
-		Model:      chatClientModel,
+		TuringAddr:      chatClientTuringAddr,
+		AristotelesAddr: chatClientAristotelesAddr,
+		Model:           chatClientModel,
 	}
 
 	return chatclient.Run(cfg)

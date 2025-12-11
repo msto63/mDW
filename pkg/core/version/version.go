@@ -17,14 +17,15 @@ const (
 	Platform = "1.0.0"
 
 	// Service versions
-	Kant    = "1.0.0"
-	Russell = "1.0.0"
-	Turing  = "1.0.0"
-	Hypatia = "1.0.0"
-	Babbage = "1.0.0"
-	Leibniz = "1.0.0"
-	Bayes   = "1.0.0"
-	Platon  = "1.0.0"
+	Kant       = "1.0.0"
+	Russell    = "1.0.0"
+	Turing     = "1.0.0"
+	Hypatia    = "1.0.0"
+	Babbage    = "1.0.0"
+	Leibniz    = "1.0.0"
+	Bayes      = "1.0.0"
+	Platon     = "1.0.0"
+	Aristoteles = "1.0.0"
 )
 
 // ServiceVersion returns the version for a given service name
@@ -46,6 +47,8 @@ func ServiceVersion(name string) string {
 		return Bayes
 	case "platon":
 		return Platon
+	case "aristoteles":
+		return Aristoteles
 	default:
 		return Platform
 	}

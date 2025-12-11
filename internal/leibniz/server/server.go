@@ -40,6 +40,9 @@ type Config struct {
 	PlatonPort    int
 	EnablePlaton  bool
 	PlatonTimeout time.Duration
+	// Web Research Agent
+	EnableWebResearchAgent bool
+	SearXNGInstances       []string
 }
 
 // MCPServerConfig holds MCP server configuration
@@ -53,15 +56,17 @@ type MCPServerConfig struct {
 // DefaultConfig returns default server configuration
 func DefaultConfig() Config {
 	return Config{
-		Host:          "0.0.0.0",
-		Port:          9140,
-		MaxSteps:      10,
-		Timeout:       120 * time.Second,
-		MCPServers:    []MCPServerConfig{},
-		PlatonHost:    "localhost",
-		PlatonPort:    9130,
-		EnablePlaton:  true,
-		PlatonTimeout: 30 * time.Second,
+		Host:                   "0.0.0.0",
+		Port:                   9140,
+		MaxSteps:               10,
+		Timeout:                120 * time.Second,
+		MCPServers:             []MCPServerConfig{},
+		PlatonHost:             "localhost",
+		PlatonPort:             9130,
+		EnablePlaton:           true,
+		PlatonTimeout:          30 * time.Second,
+		EnableWebResearchAgent: true, // Enable web-researcher agent by default
+		SearXNGInstances:       []string{},
 	}
 }
 
@@ -80,14 +85,16 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 
-	// Create service config with Platon settings
+	// Create service config with Platon and Web Research settings
 	svcCfg := service.Config{
-		MaxSteps:      cfg.MaxSteps,
-		MCPServers:    mcpConfigs,
-		EnablePlaton:  cfg.EnablePlaton,
-		PlatonHost:    cfg.PlatonHost,
-		PlatonPort:    cfg.PlatonPort,
-		PlatonTimeout: cfg.PlatonTimeout,
+		MaxSteps:               cfg.MaxSteps,
+		MCPServers:             mcpConfigs,
+		EnablePlaton:           cfg.EnablePlaton,
+		PlatonHost:             cfg.PlatonHost,
+		PlatonPort:             cfg.PlatonPort,
+		PlatonTimeout:          cfg.PlatonTimeout,
+		EnableWebResearchAgent: cfg.EnableWebResearchAgent,
+		SearXNGInstances:       cfg.SearXNGInstances,
 	}
 
 	svc, err := service.NewService(svcCfg)

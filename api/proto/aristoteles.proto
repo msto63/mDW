@@ -1,0 +1,295 @@
+syntax = "proto3";
+
+package mdw.aristoteles;
+
+option go_package = "github.com/msto63/mDW/api/gen/aristoteles";
+
+import "common.proto";
+
+// Aristoteles Service - Agentic Pipeline for intelligent prompt routing
+// Analyzes prompts, determines optimal processing strategy, and routes to appropriate services
+service AristotelesService {
+  // Main Processing
+  rpc Process(ProcessRequest) returns (ProcessResponse);
+  rpc StreamProcess(ProcessRequest) returns (stream ProcessChunk);
+
+  // Intent Analysis
+  rpc AnalyzeIntent(IntentRequest) returns (IntentResponse);
+
+  // Pipeline Management
+  rpc GetPipelineStatus(PipelineStatusRequest) returns (PipelineStatusResponse);
+  rpc CancelPipeline(CancelPipelineRequest) returns (mdw.common.Empty);
+
+  // Configuration
+  rpc GetConfig(mdw.common.Empty) returns (ConfigResponse);
+  rpc UpdateConfig(UpdateConfigRequest) returns (ConfigResponse);
+
+  // Strategy Management
+  rpc ListStrategies(mdw.common.Empty) returns (StrategyListResponse);
+  rpc GetStrategy(GetStrategyRequest) returns (StrategyInfo);
+
+  // Health
+  rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
+}
+
+// ============================================================================
+// Processing
+// ============================================================================
+
+message ProcessRequest {
+  string request_id = 1;
+  string prompt = 2;
+  string conversation_id = 3;
+  map<string, string> metadata = 4;
+  ProcessOptions options = 5;
+}
+
+message ProcessOptions {
+  bool skip_intent_analysis = 1;      // Skip intent analysis, use default strategy
+  bool skip_enrichment = 2;           // Skip prompt enrichment
+  bool skip_policy_check = 3;         // Skip policy checks via Platon
+  string force_strategy = 4;          // Force specific strategy
+  string force_model = 5;             // Force specific model
+  int32 max_iterations = 6;           // Override max enrichment iterations
+  int32 timeout_seconds = 7;          // Override timeout
+  bool debug = 8;                     // Enable debug info in response
+}
+
+message ProcessResponse {
+  string request_id = 1;
+  string response = 2;
+  IntentResult intent = 3;
+  StrategyInfo strategy = 4;
+  repeated EnrichmentStep enrichments = 5;
+  RouteInfo route = 6;
+  PipelineMetrics metrics = 7;
+  map<string, string> metadata = 8;
+  bool blocked = 9;
+  string block_reason = 10;
+}
+
+message ProcessChunk {
+  ChunkType type = 1;
+  string content = 2;
+  IntentResult intent = 3;               // Sent once after intent analysis
+  StrategyInfo strategy = 4;             // Sent once after strategy selection
+  EnrichmentStep enrichment = 5;         // Sent for each enrichment step
+  bool done = 6;
+  PipelineMetrics metrics = 7;           // Sent with final chunk
+}
+
+enum ChunkType {
+  CHUNK_TYPE_UNKNOWN = 0;
+  CHUNK_TYPE_INTENT = 1;        // Intent analysis result
+  CHUNK_TYPE_STRATEGY = 2;      // Strategy selection
+  CHUNK_TYPE_ENRICHMENT = 3;    // Enrichment progress
+  CHUNK_TYPE_THINKING = 4;      // LLM thinking
+  CHUNK_TYPE_RESPONSE = 5;      // Response content
+  CHUNK_TYPE_FINAL = 6;         // Final result with metrics
+}
+
+// ============================================================================
+// Intent Analysis
+// ============================================================================
+
+message IntentRequest {
+  string prompt = 1;
+  string conversation_id = 2;
+  map<string, string> context = 3;
+}
+
+message IntentResponse {
+  IntentResult intent = 1;
+  int64 duration_ms = 2;
+}
+
+message IntentResult {
+  IntentType primary = 1;
+  repeated IntentType secondary = 2;
+  float confidence = 3;
+  string reasoning = 4;
+  map<string, float> scores = 5;      // Score per intent type
+  repeated string detected_entities = 6;
+  string language = 7;
+  ComplexityLevel complexity = 8;
+}
+
+enum IntentType {
+  INTENT_TYPE_UNKNOWN = 0;
+  INTENT_TYPE_DIRECT_LLM = 1;         // Simple question -> Turing
+  INTENT_TYPE_CODE_GENERATION = 2;    // Code generation -> Turing with qwen2.5-coder
+  INTENT_TYPE_CODE_ANALYSIS = 3;      // Code analysis -> Turing with qwen2.5-coder
+  INTENT_TYPE_WEB_RESEARCH = 4;       // Web research -> Leibniz web-researcher agent
+  INTENT_TYPE_RAG_QUERY = 5;          // Knowledge base query -> Hypatia
+  INTENT_TYPE_TASK_DECOMPOSITION = 6; // Complex task -> Leibniz with planning
+  INTENT_TYPE_SUMMARIZATION = 7;      // Summarization -> Babbage or Turing
+  INTENT_TYPE_TRANSLATION = 8;        // Translation -> Babbage
+  INTENT_TYPE_MULTI_STEP = 9;         // Multi-step task -> Multi-agent orchestration
+  INTENT_TYPE_CREATIVE = 10;          // Creative writing -> Turing with higher temp
+  INTENT_TYPE_FACTUAL = 11;           // Factual query -> RAG + Turing
+  INTENT_TYPE_CONVERSATION = 12;      // General conversation -> Turing
+}
+
+enum ComplexityLevel {
+  COMPLEXITY_UNKNOWN = 0;
+  COMPLEXITY_SIMPLE = 1;      // Single step, direct answer
+  COMPLEXITY_MODERATE = 2;    // May need enrichment
+  COMPLEXITY_COMPLEX = 3;     // Multi-step, needs planning
+  COMPLEXITY_EXPERT = 4;      // Specialized knowledge required
+}
+
+// ============================================================================
+// Strategy
+// ============================================================================
+
+message StrategyInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string model = 4;                   // Primary model to use
+  string fallback_model = 5;          // Fallback if primary unavailable
+  TargetService target = 6;           // Primary target service
+  repeated string agents = 7;         // Agent IDs if using Leibniz
+  bool requires_enrichment = 8;       // Whether enrichment is recommended
+  repeated EnrichmentType enrichments = 9;  // Recommended enrichment types
+  float temperature = 10;             // Recommended temperature
+  int32 max_tokens = 11;              // Recommended max tokens
+}
+
+enum TargetService {
+  TARGET_UNKNOWN = 0;
+  TARGET_TURING = 1;      // Direct LLM via Turing
+  TARGET_LEIBNIZ = 2;     // Agent execution via Leibniz
+  TARGET_HYPATIA = 3;     // RAG search via Hypatia
+  TARGET_BABBAGE = 4;     // NLP processing via Babbage
+  TARGET_MULTI = 5;       // Multiple services orchestrated
+}
+
+message GetStrategyRequest {
+  string strategy_id = 1;
+}
+
+message StrategyListResponse {
+  repeated StrategyInfo strategies = 1;
+  int32 total = 2;
+}
+
+// ============================================================================
+// Enrichment
+// ============================================================================
+
+message EnrichmentStep {
+  string id = 1;
+  EnrichmentType type = 2;
+  string source = 3;              // Service/agent that provided enrichment
+  string content = 4;             // Enrichment content
+  float relevance_score = 5;      // How relevant this enrichment is
+  int64 duration_ms = 6;
+  bool success = 7;
+  string error = 8;
+}
+
+enum EnrichmentType {
+  ENRICHMENT_UNKNOWN = 0;
+  ENRICHMENT_WEB_SEARCH = 1;      // Web search results
+  ENRICHMENT_RAG = 2;             // RAG/knowledge base
+  ENRICHMENT_FACT_CHECK = 3;      // Fact verification
+  ENRICHMENT_CONTEXT = 4;         // Conversation context
+  ENRICHMENT_CODE_CONTEXT = 5;    // Code/repository context
+  ENRICHMENT_ENTITY = 6;          // Entity expansion
+}
+
+// ============================================================================
+// Routing
+// ============================================================================
+
+message RouteInfo {
+  TargetService service = 1;
+  string endpoint = 2;            // gRPC endpoint used
+  string model = 3;               // Model used
+  string agent_id = 4;            // Agent ID if Leibniz
+  int64 duration_ms = 5;
+  int32 tokens_in = 6;
+  int32 tokens_out = 7;
+}
+
+// ============================================================================
+// Pipeline Status
+// ============================================================================
+
+message PipelineStatusRequest {
+  string request_id = 1;
+}
+
+message PipelineStatusResponse {
+  string request_id = 1;
+  PipelineStage current_stage = 2;
+  repeated StageResult completed_stages = 3;
+  int64 elapsed_ms = 4;
+  bool completed = 5;
+  bool cancelled = 6;
+  string error = 7;
+}
+
+enum PipelineStage {
+  STAGE_UNKNOWN = 0;
+  STAGE_INTENT = 1;
+  STAGE_STRATEGY = 2;
+  STAGE_ENRICHMENT = 3;
+  STAGE_QUALITY = 4;
+  STAGE_POLICY = 5;
+  STAGE_ROUTING = 6;
+  STAGE_COMPLETE = 7;
+}
+
+message StageResult {
+  PipelineStage stage = 1;
+  bool success = 2;
+  int64 duration_ms = 3;
+  string details = 4;
+}
+
+message CancelPipelineRequest {
+  string request_id = 1;
+}
+
+// ============================================================================
+// Metrics
+// ============================================================================
+
+message PipelineMetrics {
+  int64 total_duration_ms = 1;
+  int64 intent_duration_ms = 2;
+  int64 strategy_duration_ms = 3;
+  int64 enrichment_duration_ms = 4;
+  int64 routing_duration_ms = 5;
+  int32 enrichment_iterations = 6;
+  int32 total_tokens = 7;
+  float quality_score = 8;
+}
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+message ConfigResponse {
+  int32 max_iterations = 1;
+  float quality_threshold = 2;
+  bool enable_web_search = 3;
+  bool enable_rag = 4;
+  int32 default_timeout_seconds = 5;
+  string intent_model = 6;
+  float intent_confidence_threshold = 7;
+  map<string, string> model_mapping = 8;  // Intent -> Model mapping
+}
+
+message UpdateConfigRequest {
+  optional int32 max_iterations = 1;
+  optional float quality_threshold = 2;
+  optional bool enable_web_search = 3;
+  optional bool enable_rag = 4;
+  optional int32 default_timeout_seconds = 5;
+  optional string intent_model = 6;
+  optional float intent_confidence_threshold = 7;
+  map<string, string> model_mapping = 8;
+}

@@ -31,11 +31,13 @@ type Config struct {
 	Version      string
 
 	// Service addresses
-	RussellAddr string
-	TuringAddr  string
-	HypatiaAddr string
-	LeibnizAddr string
-	BabbageAddr string
+	RussellAddr     string
+	TuringAddr      string
+	HypatiaAddr     string
+	LeibnizAddr     string
+	BabbageAddr     string
+	PlatonAddr      string
+	AristotelesAddr string
 }
 
 // DefaultConfig returns default server configuration
@@ -48,11 +50,13 @@ func DefaultConfig() Config {
 		Version:      "1.0.0",
 
 		// Default service addresses
-		RussellAddr: "localhost:9100",
-		TuringAddr:  "localhost:9200",
-		HypatiaAddr: "localhost:9220",
-		LeibnizAddr: "localhost:9140",
-		BabbageAddr: "localhost:9150",
+		RussellAddr:     "localhost:9100",
+		TuringAddr:      "localhost:9200",
+		HypatiaAddr:     "localhost:9220",
+		LeibnizAddr:     "localhost:9140",
+		BabbageAddr:     "localhost:9150",
+		PlatonAddr:      "localhost:9130",
+		AristotelesAddr: "localhost:9160",
 	}
 }
 
@@ -62,11 +66,13 @@ func New(cfg Config) (*Server, error) {
 
 	// Create service clients
 	clientCfg := client.Config{
-		RussellAddr: cfg.RussellAddr,
-		TuringAddr:  cfg.TuringAddr,
-		HypatiaAddr: cfg.HypatiaAddr,
-		LeibnizAddr: cfg.LeibnizAddr,
-		BabbageAddr: cfg.BabbageAddr,
+		RussellAddr:     cfg.RussellAddr,
+		TuringAddr:      cfg.TuringAddr,
+		HypatiaAddr:     cfg.HypatiaAddr,
+		LeibnizAddr:     cfg.LeibnizAddr,
+		BabbageAddr:     cfg.BabbageAddr,
+		PlatonAddr:      cfg.PlatonAddr,
+		AristotelesAddr: cfg.AristotelesAddr,
 	}
 	clients := client.NewServiceClients(clientCfg)
 

@@ -882,11 +882,27 @@ func (s *Service) ExecuteWithAgent(ctx context.Context, agentID string, message 
 	}
 	s.mu.Unlock()
 
+	// Store original settings to restore after execution
+	originalModel := s.agent.GetModel()
+	originalPrompt := s.agent.GetSystemPrompt()
+
 	// Set agent-specific model if defined
 	if agentDef.Model != "" {
 		s.agent.SetModel(agentDef.Model)
 		s.logger.Info("Using agent-specific model", "agent", agentID, "model", agentDef.Model)
 	}
+
+	// Set agent-specific system prompt if defined
+	if agentDef.SystemPrompt != "" {
+		s.agent.SetSystemPrompt(agentDef.SystemPrompt)
+		s.logger.Info("Using agent-specific system prompt", "agent", agentID, "prompt_length", len(agentDef.SystemPrompt))
+	}
+
+	// Defer restoration of original settings
+	defer func() {
+		s.agent.SetModel(originalModel)
+		s.agent.SetSystemPrompt(originalPrompt)
+	}()
 
 	// Execute the task
 	req := &ExecuteRequest{

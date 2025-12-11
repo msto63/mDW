@@ -10,6 +10,7 @@ import (
 	"time"
 
 	turingpb "github.com/msto63/mDW/api/gen/turing"
+	aristotelesServer "github.com/msto63/mDW/internal/aristoteles/server"
 	babbageServer "github.com/msto63/mDW/internal/babbage/server"
 	bayesServer "github.com/msto63/mDW/internal/bayes/server"
 	hypatiaServer "github.com/msto63/mDW/internal/hypatia/server"
@@ -42,20 +43,21 @@ Ohne Argument werden alle Services gestartet.
 Mit Argument wird nur der angegebene Service gestartet.
 
 Services:
-  kant     - API Gateway (HTTP :8080)
-  russell  - Orchestrierung (gRPC :9100)
-  turing   - LLM Service (gRPC :9200)
-  hypatia  - RAG Service (gRPC :9220)
-  babbage  - NLP Service (gRPC :9150)
-  leibniz  - Agentic AI (gRPC :9140)
-  platon   - Pipeline Service (gRPC :9130)
-  bayes    - Logging (gRPC :9120)
+  kant        - API Gateway (HTTP :8080)
+  russell     - Orchestrierung (gRPC :9100)
+  turing      - LLM Service (gRPC :9200)
+  hypatia     - RAG Service (gRPC :9220)
+  babbage     - NLP Service (gRPC :9150)
+  leibniz     - Agentic AI (gRPC :9140)
+  platon      - Pipeline Service (gRPC :9130)
+  aristoteles - Agentic Pipeline (gRPC :9160)
+  bayes       - Logging (gRPC :9120)
 
 Beispiele:
-  mdw serve          # Alle Services starten
-  mdw serve kant     # Nur API Gateway starten
-  mdw serve platon   # Nur Pipeline Service starten`,
-	ValidArgs: []string{"kant", "russell", "turing", "hypatia", "leibniz", "babbage", "bayes", "platon"},
+  mdw serve            # Alle Services starten
+  mdw serve kant       # Nur API Gateway starten
+  mdw serve aristoteles # Nur Agentic Pipeline starten`,
+	ValidArgs: []string{"kant", "russell", "turing", "hypatia", "leibniz", "babbage", "bayes", "platon", "aristoteles"},
 	Args:      cobra.MaximumNArgs(1),
 	RunE:      runServe,
 }
@@ -95,7 +97,7 @@ func startAllServices(ctx context.Context, sigCh chan os.Signal) error {
 	fmt.Println()
 
 	var wg sync.WaitGroup
-	errCh := make(chan error, 8)
+	errCh := make(chan error, 9)
 
 	// Start services in order
 	services := []struct {
@@ -109,6 +111,7 @@ func startAllServices(ctx context.Context, sigCh chan os.Signal) error {
 		{"babbage", startBabbage},
 		{"platon", startPlaton},
 		{"leibniz", startLeibniz},
+		{"aristoteles", startAristoteles},
 		{"kant", startKant},
 	}
 
@@ -176,6 +179,8 @@ func startSingleService(ctx context.Context, sigCh chan os.Signal, name string) 
 		startFn = startLeibniz
 	case "platon":
 		startFn = startPlaton
+	case "aristoteles":
+		startFn = startAristoteles
 	case "bayes":
 		startFn = startBayes
 	default:
@@ -614,6 +619,66 @@ func startPlaton(ctx context.Context) error {
 	reg, err := registration.RegisterService(ctx, "platon", version.Platon, cfg.Port, fmt.Sprintf("localhost:%d", russellPort))
 	if err != nil {
 		fmt.Printf("  [!] Platon: Russell-Registrierung fehlgeschlagen: %v\n", err)
+	}
+
+	<-ctx.Done()
+	if reg != nil {
+		reg.StopHeartbeat()
+		reg.Deregister(context.Background())
+	}
+	srv.Stop(context.Background())
+	return nil
+}
+
+func startAristoteles(ctx context.Context) error {
+	cfg := aristotelesServer.DefaultConfig()
+	// Apply central config if available
+	// Service addresses from central config
+	turingPort := 9200
+	if appConfig != nil && appConfig.Turing.Port != 0 {
+		turingPort = appConfig.Turing.Port
+	}
+	cfg.TuringAddr = fmt.Sprintf("localhost:%d", turingPort)
+
+	leibnizPort := 9140
+	if appConfig != nil && appConfig.Leibniz.Port != 0 {
+		leibnizPort = appConfig.Leibniz.Port
+	}
+	cfg.LeibnizAddr = fmt.Sprintf("localhost:%d", leibnizPort)
+
+	hypatiaPort := 9220
+	if appConfig != nil && appConfig.Hypatia.Port != 0 {
+		hypatiaPort = appConfig.Hypatia.Port
+	}
+	cfg.HypatiaAddr = fmt.Sprintf("localhost:%d", hypatiaPort)
+
+	babbagePort := 9150
+	if appConfig != nil && appConfig.Babbage.Port != 0 {
+		babbagePort = appConfig.Babbage.Port
+	}
+	cfg.BabbageAddr = fmt.Sprintf("localhost:%d", babbagePort)
+
+	platonPort := 9130
+	// Platon port not in central config yet, using default
+	cfg.PlatonAddr = fmt.Sprintf("localhost:%d", platonPort)
+
+	srv, err := aristotelesServer.New(cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  [+] Aristoteles (Agentic Pipeline) auf :%d (→ Turing, Leibniz, Hypatia, Babbage, Platon)\n", cfg.Port)
+	if err := srv.StartAsync(); err != nil {
+		return err
+	}
+
+	// Register with Russell
+	russellPort := 9100
+	if appConfig != nil && appConfig.Russell.Port != 0 {
+		russellPort = appConfig.Russell.Port
+	}
+	reg, err := registration.RegisterService(ctx, "aristoteles", version.Aristoteles, cfg.Port, fmt.Sprintf("localhost:%d", russellPort))
+	if err != nil {
+		fmt.Printf("  [!] Aristoteles: Russell-Registrierung fehlgeschlagen: %v\n", err)
 	}
 
 	<-ctx.Done()

@@ -80,3 +80,20 @@ type focusInputMsg struct{}
 
 // scrollToBottomMsg signals to scroll viewport to bottom
 type scrollToBottomMsg struct{}
+
+// aristotelesPipelineMsg is sent when Aristoteles pipeline response is received
+type aristotelesPipelineMsg struct {
+	content      string
+	intentType   string
+	strategyName string
+	qualityScore float32
+	duration     time.Duration
+	enrichments  []string
+	err          error
+}
+
+// aristotelesStatusMsg is sent when Aristoteles status is checked
+type aristotelesStatusMsg struct {
+	online bool
+	err    error
+}

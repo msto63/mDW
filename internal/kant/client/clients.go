@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	aristotelepb "github.com/msto63/mDW/api/gen/aristoteles"
 	babbagepb "github.com/msto63/mDW/api/gen/babbage"
 	hypatiapb "github.com/msto63/mDW/api/gen/hypatia"
 	leibnizpb "github.com/msto63/mDW/api/gen/leibniz"
@@ -23,62 +24,68 @@ type ServiceClients struct {
 	logger *logging.Logger
 
 	// Service addresses
-	russellAddr string
-	turingAddr  string
-	hypatiaAddr string
-	leibnizAddr string
-	babbageAddr string
-	platonAddr  string
+	russellAddr     string
+	turingAddr      string
+	hypatiaAddr     string
+	leibnizAddr     string
+	babbageAddr     string
+	platonAddr      string
+	aristotelesAddr string
 
 	// gRPC connections
-	russellConn *grpc.ClientConn
-	turingConn  *grpc.ClientConn
-	hypatiaConn *grpc.ClientConn
-	leibnizConn *grpc.ClientConn
-	babbageConn *grpc.ClientConn
-	platonConn  *grpc.ClientConn
+	russellConn     *grpc.ClientConn
+	turingConn      *grpc.ClientConn
+	hypatiaConn     *grpc.ClientConn
+	leibnizConn     *grpc.ClientConn
+	babbageConn     *grpc.ClientConn
+	platonConn      *grpc.ClientConn
+	aristotelesConn *grpc.ClientConn
 
 	// Service clients
-	Russell russellpb.RussellServiceClient
-	Turing  turingpb.TuringServiceClient
-	Hypatia hypatiapb.HypatiaServiceClient
-	Leibniz leibnizpb.LeibnizServiceClient
-	Babbage babbagepb.BabbageServiceClient
-	Platon  platonpb.PlatonServiceClient
+	Russell     russellpb.RussellServiceClient
+	Turing      turingpb.TuringServiceClient
+	Hypatia     hypatiapb.HypatiaServiceClient
+	Leibniz     leibnizpb.LeibnizServiceClient
+	Babbage     babbagepb.BabbageServiceClient
+	Platon      platonpb.PlatonServiceClient
+	Aristoteles aristotelepb.AristotelesServiceClient
 }
 
 // Config holds client configuration
 type Config struct {
-	RussellAddr string
-	TuringAddr  string
-	HypatiaAddr string
-	LeibnizAddr string
-	BabbageAddr string
-	PlatonAddr  string
+	RussellAddr     string
+	TuringAddr      string
+	HypatiaAddr     string
+	LeibnizAddr     string
+	BabbageAddr     string
+	PlatonAddr      string
+	AristotelesAddr string
 }
 
 // DefaultConfig returns default client configuration
 func DefaultConfig() Config {
 	return Config{
-		RussellAddr: "localhost:9100",
-		TuringAddr:  "localhost:9200",
-		HypatiaAddr: "localhost:9220",
-		LeibnizAddr: "localhost:9140",
-		BabbageAddr: "localhost:9150",
-		PlatonAddr:  "localhost:9130",
+		RussellAddr:     "localhost:9100",
+		TuringAddr:      "localhost:9200",
+		HypatiaAddr:     "localhost:9220",
+		LeibnizAddr:     "localhost:9140",
+		BabbageAddr:     "localhost:9150",
+		PlatonAddr:      "localhost:9130",
+		AristotelesAddr: "localhost:9160",
 	}
 }
 
 // NewServiceClients creates a new service client manager
 func NewServiceClients(cfg Config) *ServiceClients {
 	return &ServiceClients{
-		logger:      logging.New("kant-clients"),
-		russellAddr: cfg.RussellAddr,
-		turingAddr:  cfg.TuringAddr,
-		hypatiaAddr: cfg.HypatiaAddr,
-		leibnizAddr: cfg.LeibnizAddr,
-		babbageAddr: cfg.BabbageAddr,
-		platonAddr:  cfg.PlatonAddr,
+		logger:          logging.New("kant-clients"),
+		russellAddr:     cfg.RussellAddr,
+		turingAddr:      cfg.TuringAddr,
+		hypatiaAddr:     cfg.HypatiaAddr,
+		leibnizAddr:     cfg.LeibnizAddr,
+		babbageAddr:     cfg.BabbageAddr,
+		platonAddr:      cfg.PlatonAddr,
+		aristotelesAddr: cfg.AristotelesAddr,
 	}
 }
 
@@ -92,15 +99,14 @@ func (c *ServiceClients) Connect(ctx context.Context) error {
 		grpc.WithBlock(),
 	}
 
-	// Use a timeout context for connection attempts
-	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
 	var err error
+	timeout := 2 * time.Second // Per-connection timeout
 
 	// Connect to Russell (Service Discovery)
 	c.logger.Info("Connecting to Russell", "addr", c.russellAddr)
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	c.russellConn, err = grpc.DialContext(connectCtx, c.russellAddr, opts...)
+	cancel()
 	if err != nil {
 		c.logger.Warn("Failed to connect to Russell", "error", err)
 	} else {
@@ -109,7 +115,9 @@ func (c *ServiceClients) Connect(ctx context.Context) error {
 
 	// Connect to Turing (LLM)
 	c.logger.Info("Connecting to Turing", "addr", c.turingAddr)
+	connectCtx, cancel = context.WithTimeout(ctx, timeout)
 	c.turingConn, err = grpc.DialContext(connectCtx, c.turingAddr, opts...)
+	cancel()
 	if err != nil {
 		c.logger.Warn("Failed to connect to Turing", "error", err)
 	} else {
@@ -118,7 +126,9 @@ func (c *ServiceClients) Connect(ctx context.Context) error {
 
 	// Connect to Hypatia (RAG)
 	c.logger.Info("Connecting to Hypatia", "addr", c.hypatiaAddr)
+	connectCtx, cancel = context.WithTimeout(ctx, timeout)
 	c.hypatiaConn, err = grpc.DialContext(connectCtx, c.hypatiaAddr, opts...)
+	cancel()
 	if err != nil {
 		c.logger.Warn("Failed to connect to Hypatia", "error", err)
 	} else {
@@ -127,7 +137,9 @@ func (c *ServiceClients) Connect(ctx context.Context) error {
 
 	// Connect to Leibniz (Agent)
 	c.logger.Info("Connecting to Leibniz", "addr", c.leibnizAddr)
+	connectCtx, cancel = context.WithTimeout(ctx, timeout)
 	c.leibnizConn, err = grpc.DialContext(connectCtx, c.leibnizAddr, opts...)
+	cancel()
 	if err != nil {
 		c.logger.Warn("Failed to connect to Leibniz", "error", err)
 	} else {
@@ -136,7 +148,9 @@ func (c *ServiceClients) Connect(ctx context.Context) error {
 
 	// Connect to Babbage (NLP)
 	c.logger.Info("Connecting to Babbage", "addr", c.babbageAddr)
+	connectCtx, cancel = context.WithTimeout(ctx, timeout)
 	c.babbageConn, err = grpc.DialContext(connectCtx, c.babbageAddr, opts...)
+	cancel()
 	if err != nil {
 		c.logger.Warn("Failed to connect to Babbage", "error", err)
 	} else {
@@ -145,11 +159,24 @@ func (c *ServiceClients) Connect(ctx context.Context) error {
 
 	// Connect to Platon (Pipeline)
 	c.logger.Info("Connecting to Platon", "addr", c.platonAddr)
+	connectCtx, cancel = context.WithTimeout(ctx, timeout)
 	c.platonConn, err = grpc.DialContext(connectCtx, c.platonAddr, opts...)
+	cancel()
 	if err != nil {
 		c.logger.Warn("Failed to connect to Platon", "error", err)
 	} else {
 		c.Platon = platonpb.NewPlatonServiceClient(c.platonConn)
+	}
+
+	// Connect to Aristoteles (Agentic Pipeline)
+	c.logger.Info("Connecting to Aristoteles", "addr", c.aristotelesAddr)
+	connectCtx, cancel = context.WithTimeout(ctx, timeout)
+	c.aristotelesConn, err = grpc.DialContext(connectCtx, c.aristotelesAddr, opts...)
+	cancel()
+	if err != nil {
+		c.logger.Warn("Failed to connect to Aristoteles", "error", err)
+	} else {
+		c.Aristoteles = aristotelepb.NewAristotelesServiceClient(c.aristotelesConn)
 	}
 
 	c.logger.Info("Service client connections initialized")
@@ -209,6 +236,13 @@ func (c *ServiceClients) ConnectLazy() error {
 	}
 	c.Platon = platonpb.NewPlatonServiceClient(c.platonConn)
 
+	// Connect to Aristoteles
+	c.aristotelesConn, err = grpc.Dial(c.aristotelesAddr, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to dial aristoteles: %w", err)
+	}
+	c.Aristoteles = aristotelepb.NewAristotelesServiceClient(c.aristotelesConn)
+
 	c.logger.Info("Service client connections initialized (lazy)")
 	return nil
 }
@@ -250,6 +284,11 @@ func (c *ServiceClients) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if c.aristotelesConn != nil {
+		if err := c.aristotelesConn.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors closing connections: %v", errs)
@@ -275,6 +314,8 @@ func (c *ServiceClients) IsConnected(service string) bool {
 		return c.Babbage != nil
 	case "platon":
 		return c.Platon != nil
+	case "aristoteles":
+		return c.Aristoteles != nil
 	default:
 		return false
 	}
@@ -321,6 +362,12 @@ func (c *ServiceClients) GetServiceStatus() map[string]string {
 		status["platon"] = "connected"
 	} else {
 		status["platon"] = "disconnected"
+	}
+
+	if c.Aristoteles != nil {
+		status["aristoteles"] = "connected"
+	} else {
+		status["aristoteles"] = "disconnected"
 	}
 
 	return status

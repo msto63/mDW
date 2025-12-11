@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	aristotelepb "github.com/msto63/mDW/api/gen/aristoteles"
 	babbagepb "github.com/msto63/mDW/api/gen/babbage"
 	"github.com/msto63/mDW/api/gen/common"
 	hypatiapb "github.com/msto63/mDW/api/gen/hypatia"
@@ -16,6 +17,7 @@ import (
 	turingpb "github.com/msto63/mDW/api/gen/turing"
 	"github.com/msto63/mDW/internal/kant/client"
 	"github.com/msto63/mDW/pkg/core/logging"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Note: Russell import is used via clients.Russell which is already typed
@@ -526,11 +528,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePipelineExecute(w, r, id)
 	case strings.HasPrefix(path, "pipelines/"):
 		h.handlePipeline(w, r, strings.TrimPrefix(path, "pipelines/"))
-	// Pipeline Processing API
+	// Pipeline Processing API (via Platon)
 	case path == "pipeline/process" || path == "pipeline/process/":
 		h.HandlePipelineProcess(w, r)
-	case path == "pipeline/process/stream" || path == "pipeline/process/stream/":
-		h.HandlePipelineProcessStream(w, r)
+	case path == "pipeline/process/pre" || path == "pipeline/process/pre/":
+		h.HandlePipelineProcessPre(w, r)
+	case path == "pipeline/process/post" || path == "pipeline/process/post/":
+		h.HandlePipelineProcessPost(w, r)
+	case path == "pipeline/handlers" || path == "pipeline/handlers/":
+		h.HandleHandlers(w, r)
 	case path == "pipeline/pipelines" || path == "pipeline/pipelines/":
 		h.HandlePipelineDefinitions(w, r)
 	case strings.HasPrefix(path, "pipeline/pipelines/"):
@@ -541,10 +547,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.HandlePolicyTest(w, r)
 	case strings.HasPrefix(path, "pipeline/policies/"):
 		h.HandlePolicyDefinition(w, r, strings.TrimPrefix(path, "pipeline/policies/"))
-	case path == "pipeline/audit" || path == "pipeline/audit/":
-		h.HandleAuditLogs(w, r)
-	case strings.HasPrefix(path, "pipeline/audit/"):
-		h.HandleAuditLog(w, r, strings.TrimPrefix(path, "pipeline/audit/"))
 	// Platon Pipeline Processing API
 	case path == "platon/process" || path == "platon/process/":
 		h.HandlePlatonProcess(w, r)
@@ -570,6 +572,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case path == "platon/stats" || path == "platon/stats/":
 		h.HandlePlatonStats(w, r)
+	// Aristoteles Agentic Pipeline API
+	case path == "aristoteles/process" || path == "aristoteles/process/":
+		h.HandleAristotelesProcess(w, r)
+	case path == "aristoteles/stream" || path == "aristoteles/stream/":
+		h.HandleAristotelesStream(w, r)
+	case path == "aristoteles/intent" || path == "aristoteles/intent/":
+		h.HandleAristotelesIntent(w, r)
+	case path == "aristoteles/status" || path == "aristoteles/status/":
+		h.HandleAristotelesStatus(w, r)
+	case path == "aristoteles/cancel" || path == "aristoteles/cancel/":
+		h.HandleAristotelesCancel(w, r)
+	case path == "aristoteles/config" || path == "aristoteles/config/":
+		h.HandleAristotelesConfig(w, r)
+	case path == "aristoteles/strategies" || path == "aristoteles/strategies/":
+		h.HandleAristotelesStrategies(w, r)
 	default:
 		h.writeError(w, http.StatusNotFound, "not_found", "Endpoint not found", "")
 	}
@@ -646,6 +663,15 @@ func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 				"POST /api/v1/pipeline/policies/test",
 				"GET  /api/v1/pipeline/audit",
 				"GET  /api/v1/pipeline/audit/{request_id}",
+			},
+			"aristoteles": {
+				"POST /api/v1/aristoteles/process",
+				"POST /api/v1/aristoteles/stream",
+				"POST /api/v1/aristoteles/intent",
+				"GET  /api/v1/aristoteles/status",
+				"POST /api/v1/aristoteles/cancel",
+				"GET  /api/v1/aristoteles/config",
+				"GET  /api/v1/aristoteles/strategies",
 			},
 		},
 	}
@@ -2009,4 +2035,294 @@ func (h *Handler) writeError(w http.ResponseWriter, status int, code, message, d
 		Details: details,
 	}
 	h.writeJSON(w, status, resp)
+}
+
+// ============================================================================
+// Aristoteles Agentic Pipeline Handlers
+// ============================================================================
+
+// HandleAristotelesProcess handles the /api/v1/aristoteles/process endpoint
+func (h *Handler) HandleAristotelesProcess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	var req struct {
+		RequestID      string            `json:"request_id,omitempty"`
+		Prompt         string            `json:"prompt"`
+		ConversationID string            `json:"conversation_id,omitempty"`
+		Metadata       map[string]string `json:"metadata,omitempty"`
+		Options        *struct {
+			Strategy         string   `json:"strategy,omitempty"`
+			Model            string   `json:"model,omitempty"`
+			MaxIterations    int32    `json:"max_iterations,omitempty"`
+			QualityThreshold float32  `json:"quality_threshold,omitempty"`
+			EnableWebSearch  *bool    `json:"enable_web_search,omitempty"`
+			EnableRAG        *bool    `json:"enable_rag,omitempty"`
+			Tags             []string `json:"tags,omitempty"`
+		} `json:"options,omitempty"`
+	}
+
+	if err := h.readJSON(r, &req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON", err.Error())
+		return
+	}
+
+	if req.Prompt == "" {
+		h.writeError(w, http.StatusBadRequest, "missing_prompt", "Prompt is required", "")
+		return
+	}
+
+	grpcReq := &aristotelepb.ProcessRequest{
+		RequestId:      req.RequestID,
+		Prompt:         req.Prompt,
+		ConversationId: req.ConversationID,
+		Metadata:       req.Metadata,
+	}
+
+	if req.Options != nil {
+		grpcReq.Options = &aristotelepb.ProcessOptions{
+			ForceStrategy: req.Options.Strategy,
+			ForceModel:    req.Options.Model,
+			MaxIterations: req.Options.MaxIterations,
+		}
+	}
+
+	resp, err := h.clients.Aristoteles.Process(r.Context(), grpcReq)
+	if err != nil {
+		h.logger.Error("Aristoteles process failed", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "processing_failed", "Processing failed", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	data, _ := protojson.Marshal(resp)
+	w.Write(data)
+}
+
+// HandleAristotelesStream handles the /api/v1/aristoteles/stream endpoint (SSE)
+func (h *Handler) HandleAristotelesStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	var req struct {
+		RequestID      string            `json:"request_id,omitempty"`
+		Prompt         string            `json:"prompt"`
+		ConversationID string            `json:"conversation_id,omitempty"`
+		Metadata       map[string]string `json:"metadata,omitempty"`
+	}
+
+	if err := h.readJSON(r, &req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON", err.Error())
+		return
+	}
+
+	grpcReq := &aristotelepb.ProcessRequest{
+		RequestId:      req.RequestID,
+		Prompt:         req.Prompt,
+		ConversationId: req.ConversationID,
+		Metadata:       req.Metadata,
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.writeError(w, http.StatusInternalServerError, "streaming_error", "Streaming not supported", "")
+		return
+	}
+
+	stream, err := h.clients.Aristoteles.StreamProcess(r.Context(), grpcReq)
+	if err != nil {
+		h.logger.Error("Failed to start stream", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "stream_error", "Failed to start stream", err.Error())
+		return
+	}
+
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			h.logger.Error("Stream error", "error", err)
+			break
+		}
+
+		data, _ := protojson.Marshal(chunk)
+		w.Write([]byte("data: "))
+		w.Write(data)
+		w.Write([]byte("\n\n"))
+		flusher.Flush()
+	}
+
+	w.Write([]byte("data: [DONE]\n\n"))
+	flusher.Flush()
+}
+
+// HandleAristotelesIntent handles the /api/v1/aristoteles/intent endpoint
+func (h *Handler) HandleAristotelesIntent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	var req struct {
+		Prompt         string `json:"prompt"`
+		ConversationID string `json:"conversation_id,omitempty"`
+	}
+
+	if err := h.readJSON(r, &req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON", err.Error())
+		return
+	}
+
+	if req.Prompt == "" {
+		h.writeError(w, http.StatusBadRequest, "missing_prompt", "Prompt is required", "")
+		return
+	}
+
+	resp, err := h.clients.Aristoteles.AnalyzeIntent(r.Context(), &aristotelepb.IntentRequest{
+		Prompt:         req.Prompt,
+		ConversationId: req.ConversationID,
+	})
+	if err != nil {
+		h.logger.Error("Intent analysis failed", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "analysis_failed", "Intent analysis failed", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	data, _ := protojson.Marshal(resp)
+	w.Write(data)
+}
+
+// HandleAristotelesStatus handles the /api/v1/aristoteles/status endpoint
+func (h *Handler) HandleAristotelesStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	requestID := r.URL.Query().Get("request_id")
+	if requestID == "" {
+		h.writeError(w, http.StatusBadRequest, "missing_request_id", "request_id is required", "")
+		return
+	}
+
+	resp, err := h.clients.Aristoteles.GetPipelineStatus(r.Context(), &aristotelepb.PipelineStatusRequest{
+		RequestId: requestID,
+	})
+	if err != nil {
+		h.logger.Error("Get pipeline status failed", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "status_failed", "Failed to get status", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	data, _ := protojson.Marshal(resp)
+	w.Write(data)
+}
+
+// HandleAristotelesCancel handles the /api/v1/aristoteles/cancel endpoint
+func (h *Handler) HandleAristotelesCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	requestID := r.URL.Query().Get("request_id")
+	if requestID == "" {
+		h.writeError(w, http.StatusBadRequest, "missing_request_id", "request_id is required", "")
+		return
+	}
+
+	_, err := h.clients.Aristoteles.CancelPipeline(r.Context(), &aristotelepb.CancelPipelineRequest{
+		RequestId: requestID,
+	})
+	if err != nil {
+		h.logger.Error("Cancel pipeline failed", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "cancel_failed", "Failed to cancel", err.Error())
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// HandleAristotelesConfig handles the /api/v1/aristoteles/config endpoint
+func (h *Handler) HandleAristotelesConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	resp, err := h.clients.Aristoteles.GetConfig(r.Context(), &common.Empty{})
+	if err != nil {
+		h.logger.Error("Get config failed", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "config_failed", "Failed to get config", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	data, _ := protojson.Marshal(resp)
+	w.Write(data)
+}
+
+// HandleAristotelesStrategies handles the /api/v1/aristoteles/strategies endpoint
+func (h *Handler) HandleAristotelesStrategies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed", "")
+		return
+	}
+
+	if h.clients.Aristoteles == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Aristoteles service not available", "")
+		return
+	}
+
+	resp, err := h.clients.Aristoteles.ListStrategies(r.Context(), &common.Empty{})
+	if err != nil {
+		h.logger.Error("List strategies failed", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "strategies_failed", "Failed to list strategies", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	data, _ := protojson.Marshal(resp)
+	w.Write(data)
 }

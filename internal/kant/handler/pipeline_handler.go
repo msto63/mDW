@@ -3,7 +3,7 @@
 // ============================================================================
 //
 // Package:     handler
-// Description: REST API handlers for pipeline processing
+// Description: REST API handlers for pipeline processing via Platon
 // Author:      Mike Stoffels with Claude
 // Created:     2025-12-08
 // License:     MIT
@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/msto63/mDW/api/gen/common"
-	leibnizpb "github.com/msto63/mDW/api/gen/leibniz"
+	platonpb "github.com/msto63/mDW/api/gen/platon"
 )
 
 // ============================================================================
@@ -31,9 +31,8 @@ import (
 type ProcessPipelineRequest struct {
 	PipelineID string            `json:"pipeline_id,omitempty"`
 	Prompt     string            `json:"prompt"`
+	Response   string            `json:"response,omitempty"` // For post-processing
 	Metadata   map[string]string `json:"metadata,omitempty"`
-	UserID     string            `json:"user_id,omitempty"`
-	SessionID  string            `json:"session_id,omitempty"`
 	Options    *PipelineOptions  `json:"options,omitempty"`
 }
 
@@ -48,88 +47,48 @@ type PipelineOptions struct {
 
 // ProcessPipelineResponse represents a pipeline processing response
 type ProcessPipelineResponse struct {
-	RequestID       string           `json:"request_id"`
-	Success         bool             `json:"success"`
-	Response        string           `json:"response,omitempty"`
-	ProcessedPrompt string           `json:"processed_prompt,omitempty"`
-	Flags           *PipelineFlags   `json:"flags,omitempty"`
-	StageResults    []StageResult    `json:"stage_results,omitempty"`
-	DurationMs      int64            `json:"duration_ms"`
-	Error           string           `json:"error,omitempty"`
+	RequestID         string       `json:"request_id"`
+	ProcessedPrompt   string       `json:"processed_prompt,omitempty"`
+	ProcessedResponse string       `json:"processed_response,omitempty"`
+	Blocked           bool         `json:"blocked"`
+	BlockReason       string       `json:"block_reason,omitempty"`
+	Modified          bool         `json:"modified"`
+	AuditLog          []AuditEntry `json:"audit_log,omitempty"`
+	DurationMs        int64        `json:"duration_ms"`
 }
 
-// PipelineFlags represents processing flags
-type PipelineFlags struct {
-	Blocked        bool   `json:"blocked"`
-	Modified       bool   `json:"modified"`
-	Escalated      bool   `json:"escalated"`
-	RequiresReview bool   `json:"requires_review"`
-	BlockReason    string `json:"block_reason,omitempty"`
-	ModifyReason   string `json:"modify_reason,omitempty"`
-}
-
-// StageResult represents a pipeline stage result
-type StageResult struct {
-	StageName  string            `json:"stage_name"`
-	AgentID    string            `json:"agent_id,omitempty"`
-	Role       string            `json:"role,omitempty"`
-	Success    bool              `json:"success"`
-	Decision   string            `json:"decision,omitempty"`
-	Error      string            `json:"error,omitempty"`
+// AuditEntry represents an audit entry
+type AuditEntry struct {
+	Handler    string            `json:"handler"`
+	Phase      string            `json:"phase"`
 	DurationMs int64             `json:"duration_ms"`
-	Input      string            `json:"input,omitempty"`
-	Output     map[string]string `json:"output,omitempty"`
-	Skipped    bool              `json:"skipped,omitempty"`
-	SkipReason string            `json:"skip_reason,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	Modified   bool              `json:"modified"`
+	Details    map[string]string `json:"details,omitempty"`
 }
 
 // PipelineDefinitionRequest represents a pipeline definition create/update request
 type PipelineDefinitionRequest struct {
-	ID             string             `json:"id,omitempty"`
-	Name           string             `json:"name"`
-	Description    string             `json:"description,omitempty"`
-	Enabled        bool               `json:"enabled"`
-	Inherit        string             `json:"inherit,omitempty"`
-	PreProcessing  []StageConfigInput `json:"pre_processing,omitempty"`
-	PostProcessing []StageConfigInput `json:"post_processing,omitempty"`
-	Settings       *PipelineSettings  `json:"settings,omitempty"`
-}
-
-// StageConfigInput represents stage configuration input
-type StageConfigInput struct {
-	Name           string            `json:"name"`
-	AgentID        string            `json:"agent_id"`
-	Role           string            `json:"role"`
-	Required       bool              `json:"required,omitempty"`
-	OnFail         string            `json:"on_fail,omitempty"`
-	Condition      string            `json:"condition,omitempty"`
-	Priority       int               `json:"priority,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
-	RetryCount     int               `json:"retry_count,omitempty"`
-	Input          map[string]string `json:"input,omitempty"`
-	OutputMapping  map[string]string `json:"output_mapping,omitempty"`
-}
-
-// PipelineSettings represents pipeline settings
-type PipelineSettings struct {
-	MaxStages           int  `json:"max_stages,omitempty"`
-	StageTimeoutSeconds int  `json:"stage_timeout_seconds,omitempty"`
-	TotalTimeoutSeconds int  `json:"total_timeout_seconds,omitempty"`
-	FailOpen            bool `json:"fail_open,omitempty"`
+	ID           string            `json:"id,omitempty"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	Enabled      bool              `json:"enabled"`
+	PreHandlers  []string          `json:"pre_handlers,omitempty"`
+	PostHandlers []string          `json:"post_handlers,omitempty"`
+	Config       map[string]string `json:"config,omitempty"`
 }
 
 // PipelineDefinitionResponse represents a pipeline definition response
 type PipelineDefinitionResponse struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Description    string             `json:"description,omitempty"`
-	Enabled        bool               `json:"enabled"`
-	Inherit        string             `json:"inherit,omitempty"`
-	PreProcessing  []StageConfigInput `json:"pre_processing,omitempty"`
-	PostProcessing []StageConfigInput `json:"post_processing,omitempty"`
-	Settings       *PipelineSettings  `json:"settings,omitempty"`
-	CreatedAt      string             `json:"created_at,omitempty"`
-	UpdatedAt      string             `json:"updated_at,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	Enabled      bool              `json:"enabled"`
+	PreHandlers  []string          `json:"pre_handlers,omitempty"`
+	PostHandlers []string          `json:"post_handlers,omitempty"`
+	Config       map[string]string `json:"config,omitempty"`
+	CreatedAt    string            `json:"created_at,omitempty"`
+	UpdatedAt    string            `json:"updated_at,omitempty"`
 }
 
 // PipelineDefinitionsResponse represents a list of pipeline definitions
@@ -217,48 +176,20 @@ type PolicyViolation struct {
 	Matched     string `json:"matched,omitempty"`
 }
 
-// AuditLogRequest represents an audit log query request
-type AuditLogRequest struct {
-	RequestID string `json:"request_id,omitempty"`
-	StartTime int64  `json:"start_time,omitempty"`
-	EndTime   int64  `json:"end_time,omitempty"`
-	UserID    string `json:"user_id,omitempty"`
-	Decision  string `json:"decision,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	Offset    int    `json:"offset,omitempty"`
+// HandlerDefinitionResponse represents a handler definition response
+type HandlerDefinitionResponse struct {
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	Priority    int               `json:"priority"`
+	Description string            `json:"description,omitempty"`
+	Enabled     bool              `json:"enabled"`
+	Config      map[string]string `json:"config,omitempty"`
 }
 
-// AuditLogResponse represents an audit log response
-type AuditLogResponse struct {
-	RequestID string       `json:"request_id"`
-	Entries   []AuditEntry `json:"entries"`
-}
-
-// AuditEntry represents an audit entry
-type AuditEntry struct {
-	Timestamp   int64             `json:"timestamp"`
-	Stage       string            `json:"stage"`
-	Action      string            `json:"action"`
-	Decision    string            `json:"decision"`
-	Details     map[string]string `json:"details,omitempty"`
-	UserID      string            `json:"user_id,omitempty"`
-	RequestHash string            `json:"request_hash,omitempty"`
-}
-
-// AuditLogListResponse represents a list of audit log summaries
-type AuditLogListResponse struct {
-	Logs  []AuditLogSummary `json:"logs"`
-	Total int               `json:"total"`
-}
-
-// AuditLogSummary represents an audit log summary
-type AuditLogSummary struct {
-	RequestID   string `json:"request_id"`
-	Timestamp   int64  `json:"timestamp"`
-	UserID      string `json:"user_id,omitempty"`
-	Decision    string `json:"decision"`
-	StageCount  int    `json:"stage_count"`
-	RequestHash string `json:"request_hash,omitempty"`
+// HandlersListResponse represents a list of handlers
+type HandlersListResponse struct {
+	Handlers []HandlerDefinitionResponse `json:"handlers"`
+	Total    int                         `json:"total"`
 }
 
 // ============================================================================
@@ -283,8 +214,8 @@ func (h *Handler) HandlePipelineProcess(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
@@ -292,16 +223,16 @@ func (h *Handler) HandlePipelineProcess(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 
 	// Build gRPC request
-	grpcReq := &leibnizpb.ProcessPipelineRequest{
+	grpcReq := &platonpb.ProcessRequest{
+		RequestId:  fmt.Sprintf("kant-%d", time.Now().UnixNano()),
 		PipelineId: req.PipelineID,
 		Prompt:     req.Prompt,
+		Response:   req.Response,
 		Metadata:   req.Metadata,
-		UserId:     req.UserID,
-		SessionId:  req.SessionID,
 	}
 
 	if req.Options != nil {
-		grpcReq.Options = &leibnizpb.PipelineOptions{
+		grpcReq.Options = &platonpb.ProcessOptions{
 			SkipPreProcessing:  req.Options.SkipPreProcessing,
 			SkipPostProcessing: req.Options.SkipPostProcessing,
 			DryRun:             req.Options.DryRun,
@@ -310,7 +241,7 @@ func (h *Handler) HandlePipelineProcess(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	grpcResp, err := h.clients.Leibniz.ProcessPipeline(ctx, grpcReq)
+	grpcResp, err := h.clients.Platon.Process(ctx, grpcReq)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, "internal_error", "Pipeline processing failed", err.Error())
 		return
@@ -318,47 +249,32 @@ func (h *Handler) HandlePipelineProcess(w http.ResponseWriter, r *http.Request) 
 
 	// Convert response
 	resp := ProcessPipelineResponse{
-		RequestID:       grpcResp.RequestId,
-		Success:         grpcResp.Success,
-		Response:        grpcResp.Response,
-		ProcessedPrompt: grpcResp.ProcessedPrompt,
-		DurationMs:      grpcResp.DurationMs,
-		Error:           grpcResp.Error,
+		RequestID:         grpcResp.RequestId,
+		ProcessedPrompt:   grpcResp.ProcessedPrompt,
+		ProcessedResponse: grpcResp.ProcessedResponse,
+		Blocked:           grpcResp.Blocked,
+		BlockReason:       grpcResp.BlockReason,
+		Modified:          grpcResp.Modified,
+		DurationMs:        grpcResp.DurationMs,
 	}
 
-	if grpcResp.Flags != nil {
-		resp.Flags = &PipelineFlags{
-			Blocked:        grpcResp.Flags.Blocked,
-			Modified:       grpcResp.Flags.Modified,
-			Escalated:      grpcResp.Flags.Escalated,
-			RequiresReview: grpcResp.Flags.RequiresReview,
-			BlockReason:    grpcResp.Flags.BlockReason,
-			ModifyReason:   grpcResp.Flags.ModifyReason,
-		}
-	}
-
-	resp.StageResults = make([]StageResult, len(grpcResp.StageResults))
-	for i, sr := range grpcResp.StageResults {
-		resp.StageResults[i] = StageResult{
-			StageName:  sr.StageName,
-			AgentID:    sr.AgentId,
-			Role:       sr.Role,
-			Success:    sr.Success,
-			Decision:   sr.Decision,
-			Error:      sr.Error,
-			DurationMs: sr.DurationMs,
-			Input:      sr.Input,
-			Output:     sr.Output,
-			Skipped:    sr.Skipped,
-			SkipReason: sr.SkipReason,
+	resp.AuditLog = make([]AuditEntry, len(grpcResp.AuditLog))
+	for i, entry := range grpcResp.AuditLog {
+		resp.AuditLog[i] = AuditEntry{
+			Handler:    entry.Handler,
+			Phase:      entry.Phase,
+			DurationMs: entry.DurationMs,
+			Error:      entry.Error,
+			Modified:   entry.Modified,
+			Details:    entry.Details,
 		}
 	}
 
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// HandlePipelineProcessStream handles POST /api/v1/pipeline/process/stream (SSE)
-func (h *Handler) HandlePipelineProcessStream(w http.ResponseWriter, r *http.Request) {
+// HandlePipelineProcessPre handles POST /api/v1/pipeline/process/pre
+func (h *Handler) HandlePipelineProcessPre(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use POST", "")
 		return
@@ -375,81 +291,156 @@ func (h *Handler) HandlePipelineProcessStream(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		h.writeError(w, http.StatusInternalServerError, "internal_error", "Streaming not supported", "")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	// Build gRPC request
-	grpcReq := &leibnizpb.ProcessPipelineRequest{
+	grpcReq := &platonpb.ProcessRequest{
+		RequestId:  fmt.Sprintf("kant-%d", time.Now().UnixNano()),
 		PipelineId: req.PipelineID,
 		Prompt:     req.Prompt,
 		Metadata:   req.Metadata,
-		UserId:     req.UserID,
-		SessionId:  req.SessionID,
 	}
 
-	if req.Options != nil {
-		grpcReq.Options = &leibnizpb.PipelineOptions{
-			SkipPreProcessing:  req.Options.SkipPreProcessing,
-			SkipPostProcessing: req.Options.SkipPostProcessing,
-			DryRun:             req.Options.DryRun,
-			TimeoutSeconds:     int32(req.Options.TimeoutSeconds),
-			Debug:              req.Options.Debug,
-		}
-	}
-
-	stream, err := h.clients.Leibniz.StreamProcessPipeline(ctx, grpcReq)
+	grpcResp, err := h.clients.Platon.ProcessPre(ctx, grpcReq)
 	if err != nil {
-		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
-		flusher.Flush()
+		h.writeError(w, http.StatusInternalServerError, "internal_error", "Pre-processing failed", err.Error())
 		return
 	}
 
-	for {
-		result, err := stream.Recv()
-		if err != nil {
-			if err.Error() == "EOF" {
-				fmt.Fprintf(w, "event: done\ndata: [DONE]\n\n")
-			} else {
-				fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
-			}
-			flusher.Flush()
-			break
-		}
-
-		// Send stage result
-		data := StageResult{
-			StageName:  result.StageName,
-			AgentID:    result.AgentId,
-			Role:       result.Role,
-			Success:    result.Success,
-			Decision:   result.Decision,
-			Error:      result.Error,
-			DurationMs: result.DurationMs,
-			Input:      result.Input,
-			Output:     result.Output,
-			Skipped:    result.Skipped,
-			SkipReason: result.SkipReason,
-		}
-
-		h.writeSSEEvent(w, "stage", data)
-		flusher.Flush()
+	resp := ProcessPipelineResponse{
+		RequestID:       grpcResp.RequestId,
+		ProcessedPrompt: grpcResp.ProcessedPrompt,
+		Blocked:         grpcResp.Blocked,
+		BlockReason:     grpcResp.BlockReason,
+		Modified:        grpcResp.Modified,
+		DurationMs:      grpcResp.DurationMs,
 	}
+
+	resp.AuditLog = make([]AuditEntry, len(grpcResp.AuditLog))
+	for i, entry := range grpcResp.AuditLog {
+		resp.AuditLog[i] = AuditEntry{
+			Handler:    entry.Handler,
+			Phase:      entry.Phase,
+			DurationMs: entry.DurationMs,
+			Error:      entry.Error,
+			Modified:   entry.Modified,
+			Details:    entry.Details,
+		}
+	}
+
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// HandlePipelineProcessPost handles POST /api/v1/pipeline/process/post
+func (h *Handler) HandlePipelineProcessPost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use POST", "")
+		return
+	}
+
+	var req ProcessPipelineRequest
+	if err := h.readJSON(r, &req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON", err.Error())
+		return
+	}
+
+	if req.Response == "" {
+		h.writeError(w, http.StatusBadRequest, "invalid_request", "Response required for post-processing", "")
+		return
+	}
+
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	grpcReq := &platonpb.ProcessRequest{
+		RequestId:  fmt.Sprintf("kant-%d", time.Now().UnixNano()),
+		PipelineId: req.PipelineID,
+		Prompt:     req.Prompt,
+		Response:   req.Response,
+		Metadata:   req.Metadata,
+	}
+
+	grpcResp, err := h.clients.Platon.ProcessPost(ctx, grpcReq)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "internal_error", "Post-processing failed", err.Error())
+		return
+	}
+
+	resp := ProcessPipelineResponse{
+		RequestID:         grpcResp.RequestId,
+		ProcessedResponse: grpcResp.ProcessedResponse,
+		Blocked:           grpcResp.Blocked,
+		BlockReason:       grpcResp.BlockReason,
+		Modified:          grpcResp.Modified,
+		DurationMs:        grpcResp.DurationMs,
+	}
+
+	resp.AuditLog = make([]AuditEntry, len(grpcResp.AuditLog))
+	for i, entry := range grpcResp.AuditLog {
+		resp.AuditLog[i] = AuditEntry{
+			Handler:    entry.Handler,
+			Phase:      entry.Phase,
+			DurationMs: entry.DurationMs,
+			Error:      entry.Error,
+			Modified:   entry.Modified,
+			Details:    entry.Details,
+		}
+	}
+
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// ============================================================================
+// Handler Management
+// ============================================================================
+
+// HandleHandlers handles GET /api/v1/pipeline/handlers
+func (h *Handler) HandleHandlers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET", "")
+		return
+	}
+
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	grpcResp, err := h.clients.Platon.ListHandlers(ctx, &common.Empty{})
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list handlers", err.Error())
+		return
+	}
+
+	handlers := make([]HandlerDefinitionResponse, len(grpcResp.Handlers))
+	for i, handler := range grpcResp.Handlers {
+		handlers[i] = HandlerDefinitionResponse{
+			Name:        handler.Name,
+			Type:        handler.Type.String(),
+			Priority:    int(handler.Priority),
+			Description: handler.Description,
+			Enabled:     handler.Enabled,
+			Config:      handler.Config,
+		}
+	}
+
+	h.writeJSON(w, http.StatusOK, HandlersListResponse{
+		Handlers: handlers,
+		Total:    int(grpcResp.Total),
+	})
 }
 
 // ============================================================================
@@ -458,8 +449,8 @@ func (h *Handler) HandlePipelineProcessStream(w http.ResponseWriter, r *http.Req
 
 // HandlePipelineDefinitions handles GET/POST /api/v1/pipeline/pipelines
 func (h *Handler) HandlePipelineDefinitions(w http.ResponseWriter, r *http.Request) {
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
@@ -468,7 +459,7 @@ func (h *Handler) HandlePipelineDefinitions(w http.ResponseWriter, r *http.Reque
 
 	switch r.Method {
 	case http.MethodGet:
-		grpcResp, err := h.clients.Leibniz.ListPipelines(ctx, &common.Empty{})
+		grpcResp, err := h.clients.Platon.ListPipelines(ctx, &common.Empty{})
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list pipelines", err.Error())
 			return
@@ -491,8 +482,17 @@ func (h *Handler) HandlePipelineDefinitions(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		grpcReq := pipelineRequestToProto(&req)
-		grpcResp, err := h.clients.Leibniz.CreatePipeline(ctx, grpcReq)
+		grpcReq := &platonpb.CreatePipelineRequest{
+			Id:           req.ID,
+			Name:         req.Name,
+			Description:  req.Description,
+			Enabled:      req.Enabled,
+			PreHandlers:  req.PreHandlers,
+			PostHandlers: req.PostHandlers,
+			Config:       req.Config,
+		}
+
+		grpcResp, err := h.clients.Platon.CreatePipeline(ctx, grpcReq)
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create pipeline", err.Error())
 			return
@@ -507,8 +507,8 @@ func (h *Handler) HandlePipelineDefinitions(w http.ResponseWriter, r *http.Reque
 
 // HandlePipelineDefinition handles GET/PUT/DELETE /api/v1/pipeline/pipelines/{id}
 func (h *Handler) HandlePipelineDefinition(w http.ResponseWriter, r *http.Request, id string) {
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
@@ -518,7 +518,7 @@ func (h *Handler) HandlePipelineDefinition(w http.ResponseWriter, r *http.Reques
 
 	switch r.Method {
 	case http.MethodGet:
-		grpcResp, err := h.clients.Leibniz.GetPipeline(ctx, &leibnizpb.GetPipelineRequest{Id: id})
+		grpcResp, err := h.clients.Platon.GetPipeline(ctx, &platonpb.GetPipelineRequest{Id: id})
 		if err != nil {
 			h.writeError(w, http.StatusNotFound, "not_found", "Pipeline not found", err.Error())
 			return
@@ -533,24 +533,17 @@ func (h *Handler) HandlePipelineDefinition(w http.ResponseWriter, r *http.Reques
 		}
 		req.ID = id
 
-		grpcReq := &leibnizpb.UpdatePipelineRequest{
-			Id:             id,
-			Name:           req.Name,
-			Description:    req.Description,
-			Enabled:        req.Enabled,
-			PreProcessing:  stageConfigsToProto(req.PreProcessing),
-			PostProcessing: stageConfigsToProto(req.PostProcessing),
-		}
-		if req.Settings != nil {
-			grpcReq.Settings = &leibnizpb.PipelineSettings{
-				MaxStages:           int32(req.Settings.MaxStages),
-				StageTimeoutSeconds: int32(req.Settings.StageTimeoutSeconds),
-				TotalTimeoutSeconds: int32(req.Settings.TotalTimeoutSeconds),
-				FailOpen:            req.Settings.FailOpen,
-			}
+		grpcReq := &platonpb.UpdatePipelineRequest{
+			Id:           id,
+			Name:         req.Name,
+			Description:  req.Description,
+			Enabled:      req.Enabled,
+			PreHandlers:  req.PreHandlers,
+			PostHandlers: req.PostHandlers,
+			Config:       req.Config,
 		}
 
-		grpcResp, err := h.clients.Leibniz.UpdatePipeline(ctx, grpcReq)
+		grpcResp, err := h.clients.Platon.UpdatePipeline(ctx, grpcReq)
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update pipeline", err.Error())
 			return
@@ -558,7 +551,7 @@ func (h *Handler) HandlePipelineDefinition(w http.ResponseWriter, r *http.Reques
 		h.writeJSON(w, http.StatusOK, pipelineInfoToResponse(grpcResp))
 
 	case http.MethodDelete:
-		_, err := h.clients.Leibniz.DeletePipeline(ctx, &leibnizpb.DeletePipelineRequest{Id: id})
+		_, err := h.clients.Platon.DeletePipeline(ctx, &platonpb.DeletePipelineRequest{Id: id})
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete pipeline", err.Error())
 			return
@@ -579,8 +572,8 @@ func (h *Handler) HandlePipelineDefinition(w http.ResponseWriter, r *http.Reques
 
 // HandlePolicyDefinitions handles GET/POST /api/v1/pipeline/policies
 func (h *Handler) HandlePolicyDefinitions(w http.ResponseWriter, r *http.Request) {
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
@@ -589,7 +582,7 @@ func (h *Handler) HandlePolicyDefinitions(w http.ResponseWriter, r *http.Request
 
 	switch r.Method {
 	case http.MethodGet:
-		grpcResp, err := h.clients.Leibniz.ListPolicies(ctx, &common.Empty{})
+		grpcResp, err := h.clients.Platon.ListPolicies(ctx, &common.Empty{})
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list policies", err.Error())
 			return
@@ -613,7 +606,7 @@ func (h *Handler) HandlePolicyDefinitions(w http.ResponseWriter, r *http.Request
 		}
 
 		grpcReq := policyRequestToProto(&req)
-		grpcResp, err := h.clients.Leibniz.CreatePolicy(ctx, grpcReq)
+		grpcResp, err := h.clients.Platon.CreatePolicy(ctx, grpcReq)
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create policy", err.Error())
 			return
@@ -628,8 +621,8 @@ func (h *Handler) HandlePolicyDefinitions(w http.ResponseWriter, r *http.Request
 
 // HandlePolicyDefinition handles GET/PUT/DELETE /api/v1/pipeline/policies/{id}
 func (h *Handler) HandlePolicyDefinition(w http.ResponseWriter, r *http.Request, id string) {
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
@@ -639,7 +632,7 @@ func (h *Handler) HandlePolicyDefinition(w http.ResponseWriter, r *http.Request,
 
 	switch r.Method {
 	case http.MethodGet:
-		grpcResp, err := h.clients.Leibniz.GetPolicy(ctx, &leibnizpb.GetPolicyRequest{Id: id})
+		grpcResp, err := h.clients.Platon.GetPolicy(ctx, &platonpb.GetPolicyRequest{Id: id})
 		if err != nil {
 			h.writeError(w, http.StatusNotFound, "not_found", "Policy not found", err.Error())
 			return
@@ -654,17 +647,17 @@ func (h *Handler) HandlePolicyDefinition(w http.ResponseWriter, r *http.Request,
 		}
 		req.ID = id
 
-		grpcReq := &leibnizpb.UpdatePolicyRequest{
+		grpcReq := &platonpb.UpdatePolicyRequest{
 			Id:          id,
 			Name:        req.Name,
 			Description: req.Description,
-			PolicyType:  req.PolicyType,
+			Type:        stringToPolicyType(req.PolicyType),
 			Enabled:     req.Enabled,
 			Priority:    int32(req.Priority),
 			Rules:       policyRulesToProto(req.Rules),
 		}
 		if req.LLMCheck != nil {
-			grpcReq.LlmCheck = &leibnizpb.LLMCheckConfig{
+			grpcReq.LlmCheck = &platonpb.LLMCheckConfig{
 				Enabled:        req.LLMCheck.Enabled,
 				Model:          req.LLMCheck.Model,
 				Prompt:         req.LLMCheck.Prompt,
@@ -673,7 +666,7 @@ func (h *Handler) HandlePolicyDefinition(w http.ResponseWriter, r *http.Request,
 			}
 		}
 
-		grpcResp, err := h.clients.Leibniz.UpdatePolicy(ctx, grpcReq)
+		grpcResp, err := h.clients.Platon.UpdatePolicy(ctx, grpcReq)
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update policy", err.Error())
 			return
@@ -681,7 +674,7 @@ func (h *Handler) HandlePolicyDefinition(w http.ResponseWriter, r *http.Request,
 		h.writeJSON(w, http.StatusOK, policyInfoToResponse(grpcResp))
 
 	case http.MethodDelete:
-		_, err := h.clients.Leibniz.DeletePolicy(ctx, &leibnizpb.DeletePolicyRequest{Id: id})
+		_, err := h.clients.Platon.DeletePolicy(ctx, &platonpb.DeletePolicyRequest{Id: id})
 		if err != nil {
 			h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete policy", err.Error())
 			return
@@ -714,31 +707,31 @@ func (h *Handler) HandlePolicyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
+	if h.clients.Platon == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Platon service not available", "")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	grpcReq := &leibnizpb.TestPolicyRequest{
+	grpcReq := &platonpb.TestPolicyRequest{
 		TestText: req.TestText,
 	}
 
 	// If policy is provided inline, include it
 	if req.Policy.Name != "" {
-		grpcReq.Policy = &leibnizpb.PolicyInfo{
+		grpcReq.Policy = &platonpb.PolicyInfo{
 			Id:          req.Policy.ID,
 			Name:        req.Policy.Name,
 			Description: req.Policy.Description,
-			PolicyType:  req.Policy.PolicyType,
+			Type:        stringToPolicyType(req.Policy.PolicyType),
 			Enabled:     req.Policy.Enabled,
 			Priority:    int32(req.Policy.Priority),
 			Rules:       policyRulesToProto(req.Policy.Rules),
 		}
 		if req.Policy.LLMCheck != nil {
-			grpcReq.Policy.LlmCheck = &leibnizpb.LLMCheckConfig{
+			grpcReq.Policy.LlmCheck = &platonpb.LLMCheckConfig{
 				Enabled:        req.Policy.LLMCheck.Enabled,
 				Model:          req.Policy.LLMCheck.Model,
 				Prompt:         req.Policy.LLMCheck.Prompt,
@@ -748,7 +741,7 @@ func (h *Handler) HandlePolicyTest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	grpcResp, err := h.clients.Leibniz.TestPolicy(ctx, grpcReq)
+	grpcResp, err := h.clients.Platon.TestPolicy(ctx, grpcReq)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, "internal_error", "Policy test failed", err.Error())
 		return
@@ -763,13 +756,13 @@ func (h *Handler) HandlePolicyTest(w http.ResponseWriter, r *http.Request) {
 			Severity:    v.Severity,
 			Description: v.Description,
 			Location:    v.Location,
-			Action:      v.Action,
+			Action:      v.Action.String(),
 			Matched:     v.Matched,
 		}
 	}
 
 	resp := TestPolicyResponse{
-		Decision:     grpcResp.Decision,
+		Decision:     grpcResp.Decision.String(),
 		Violations:   violations,
 		ModifiedText: grpcResp.ModifiedText,
 		Reason:       grpcResp.Reason,
@@ -777,99 +770,6 @@ func (h *Handler) HandlePolicyTest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, resp)
-}
-
-// ============================================================================
-// Audit Handlers
-// ============================================================================
-
-// HandleAuditLogs handles GET /api/v1/pipeline/audit
-func (h *Handler) HandleAuditLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET", "")
-		return
-	}
-
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	// Parse query parameters
-	q := r.URL.Query()
-	grpcReq := &leibnizpb.ListAuditLogsRequest{
-		UserId:   q.Get("user_id"),
-		Decision: q.Get("decision"),
-	}
-
-	grpcResp, err := h.clients.Leibniz.ListAuditLogs(ctx, grpcReq)
-	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list audit logs", err.Error())
-		return
-	}
-
-	logs := make([]AuditLogSummary, len(grpcResp.Logs))
-	for i, l := range grpcResp.Logs {
-		logs[i] = AuditLogSummary{
-			RequestID:   l.RequestId,
-			Timestamp:   l.Timestamp,
-			UserID:      l.UserId,
-			Decision:    l.Decision,
-			StageCount:  int(l.StageCount),
-			RequestHash: l.RequestHash,
-		}
-	}
-
-	h.writeJSON(w, http.StatusOK, AuditLogListResponse{
-		Logs:  logs,
-		Total: int(grpcResp.Total),
-	})
-}
-
-// HandleAuditLog handles GET /api/v1/pipeline/audit/{request_id}
-func (h *Handler) HandleAuditLog(w http.ResponseWriter, r *http.Request, requestID string) {
-	if r.Method != http.MethodGet {
-		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET", "")
-		return
-	}
-
-	if h.clients.Leibniz == nil {
-		h.writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Leibniz service not available", "")
-		return
-	}
-
-	requestID = strings.TrimSuffix(requestID, "/")
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	grpcResp, err := h.clients.Leibniz.GetAuditLog(ctx, &leibnizpb.GetAuditLogRequest{
-		RequestId: requestID,
-	})
-	if err != nil {
-		h.writeError(w, http.StatusNotFound, "not_found", "Audit log not found", err.Error())
-		return
-	}
-
-	entries := make([]AuditEntry, len(grpcResp.Entries))
-	for i, e := range grpcResp.Entries {
-		entries[i] = AuditEntry{
-			Timestamp:   e.Timestamp,
-			Stage:       e.Stage,
-			Action:      e.Action,
-			Decision:    e.Decision,
-			Details:     e.Details,
-			UserID:      e.UserId,
-			RequestHash: e.RequestHash,
-		}
-	}
-
-	h.writeJSON(w, http.StatusOK, AuditLogResponse{
-		RequestID: grpcResp.RequestId,
-		Entries:   entries,
-	})
 }
 
 // ============================================================================
@@ -881,26 +781,16 @@ func (h *Handler) writeSSEEvent(w http.ResponseWriter, event string, data interf
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, jsonData)
 }
 
-func pipelineInfoToResponse(p *leibnizpb.PipelineInfo) PipelineDefinitionResponse {
+func pipelineInfoToResponse(p *platonpb.PipelineInfo) PipelineDefinitionResponse {
 	resp := PipelineDefinitionResponse{
-		ID:          p.Id,
-		Name:        p.Name,
-		Description: p.Description,
-		Enabled:     p.Enabled,
-		Inherit:     p.Inherit,
+		ID:           p.Id,
+		Name:         p.Name,
+		Description:  p.Description,
+		Enabled:      p.Enabled,
+		PreHandlers:  p.PreHandlers,
+		PostHandlers: p.PostHandlers,
+		Config:       p.Config,
 	}
-
-	if p.Settings != nil {
-		resp.Settings = &PipelineSettings{
-			MaxStages:           int(p.Settings.MaxStages),
-			StageTimeoutSeconds: int(p.Settings.StageTimeoutSeconds),
-			TotalTimeoutSeconds: int(p.Settings.TotalTimeoutSeconds),
-			FailOpen:            p.Settings.FailOpen,
-		}
-	}
-
-	resp.PreProcessing = stageConfigsFromProto(p.PreProcessing)
-	resp.PostProcessing = stageConfigsFromProto(p.PostProcessing)
 
 	if p.CreatedAt > 0 {
 		resp.CreatedAt = time.Unix(p.CreatedAt, 0).Format(time.RFC3339)
@@ -912,75 +802,12 @@ func pipelineInfoToResponse(p *leibnizpb.PipelineInfo) PipelineDefinitionRespons
 	return resp
 }
 
-func pipelineRequestToProto(req *PipelineDefinitionRequest) *leibnizpb.CreatePipelineRequest {
-	grpcReq := &leibnizpb.CreatePipelineRequest{
-		Id:             req.ID,
-		Name:           req.Name,
-		Description:    req.Description,
-		Enabled:        req.Enabled,
-		Inherit:        req.Inherit,
-		PreProcessing:  stageConfigsToProto(req.PreProcessing),
-		PostProcessing: stageConfigsToProto(req.PostProcessing),
-	}
-
-	if req.Settings != nil {
-		grpcReq.Settings = &leibnizpb.PipelineSettings{
-			MaxStages:           int32(req.Settings.MaxStages),
-			StageTimeoutSeconds: int32(req.Settings.StageTimeoutSeconds),
-			TotalTimeoutSeconds: int32(req.Settings.TotalTimeoutSeconds),
-			FailOpen:            req.Settings.FailOpen,
-		}
-	}
-
-	return grpcReq
-}
-
-func stageConfigsToProto(stages []StageConfigInput) []*leibnizpb.StageConfig {
-	result := make([]*leibnizpb.StageConfig, len(stages))
-	for i, s := range stages {
-		result[i] = &leibnizpb.StageConfig{
-			Name:           s.Name,
-			AgentId:        s.AgentID,
-			Role:           s.Role,
-			Required:       s.Required,
-			OnFail:         s.OnFail,
-			Condition:      s.Condition,
-			Priority:       int32(s.Priority),
-			TimeoutSeconds: int32(s.TimeoutSeconds),
-			RetryCount:     int32(s.RetryCount),
-			Input:          s.Input,
-			OutputMapping:  s.OutputMapping,
-		}
-	}
-	return result
-}
-
-func stageConfigsFromProto(stages []*leibnizpb.StageConfig) []StageConfigInput {
-	result := make([]StageConfigInput, len(stages))
-	for i, s := range stages {
-		result[i] = StageConfigInput{
-			Name:           s.Name,
-			AgentID:        s.AgentId,
-			Role:           s.Role,
-			Required:       s.Required,
-			OnFail:         s.OnFail,
-			Condition:      s.Condition,
-			Priority:       int(s.Priority),
-			TimeoutSeconds: int(s.TimeoutSeconds),
-			RetryCount:     int(s.RetryCount),
-			Input:          s.Input,
-			OutputMapping:  s.OutputMapping,
-		}
-	}
-	return result
-}
-
-func policyInfoToResponse(p *leibnizpb.PolicyInfo) PolicyDefinitionResponse {
+func policyInfoToResponse(p *platonpb.PolicyInfo) PolicyDefinitionResponse {
 	resp := PolicyDefinitionResponse{
 		ID:          p.Id,
 		Name:        p.Name,
 		Description: p.Description,
-		PolicyType:  p.PolicyType,
+		PolicyType:  p.Type.String(),
 		Enabled:     p.Enabled,
 		Priority:    int(p.Priority),
 	}
@@ -1007,19 +834,19 @@ func policyInfoToResponse(p *leibnizpb.PolicyInfo) PolicyDefinitionResponse {
 	return resp
 }
 
-func policyRequestToProto(req *PolicyDefinitionRequest) *leibnizpb.CreatePolicyRequest {
-	grpcReq := &leibnizpb.CreatePolicyRequest{
+func policyRequestToProto(req *PolicyDefinitionRequest) *platonpb.CreatePolicyRequest {
+	grpcReq := &platonpb.CreatePolicyRequest{
 		Id:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
-		PolicyType:  req.PolicyType,
+		Type:        stringToPolicyType(req.PolicyType),
 		Enabled:     req.Enabled,
 		Priority:    int32(req.Priority),
 		Rules:       policyRulesToProto(req.Rules),
 	}
 
 	if req.LLMCheck != nil {
-		grpcReq.LlmCheck = &leibnizpb.LLMCheckConfig{
+		grpcReq.LlmCheck = &platonpb.LLMCheckConfig{
 			Enabled:        req.LLMCheck.Enabled,
 			Model:          req.LLMCheck.Model,
 			Prompt:         req.LLMCheck.Prompt,
@@ -1031,13 +858,13 @@ func policyRequestToProto(req *PolicyDefinitionRequest) *leibnizpb.CreatePolicyR
 	return grpcReq
 }
 
-func policyRulesToProto(rules []PolicyRuleInput) []*leibnizpb.PolicyRule {
-	result := make([]*leibnizpb.PolicyRule, len(rules))
+func policyRulesToProto(rules []PolicyRuleInput) []*platonpb.PolicyRule {
+	result := make([]*platonpb.PolicyRule, len(rules))
 	for i, r := range rules {
-		result[i] = &leibnizpb.PolicyRule{
+		result[i] = &platonpb.PolicyRule{
 			Id:            r.ID,
 			Pattern:       r.Pattern,
-			Action:        r.Action,
+			Action:        stringToPolicyAction(r.Action),
 			Message:       r.Message,
 			Replacement:   r.Replacement,
 			CaseSensitive: r.CaseSensitive,
@@ -1046,17 +873,53 @@ func policyRulesToProto(rules []PolicyRuleInput) []*leibnizpb.PolicyRule {
 	return result
 }
 
-func policyRulesFromProto(rules []*leibnizpb.PolicyRule) []PolicyRuleInput {
+func policyRulesFromProto(rules []*platonpb.PolicyRule) []PolicyRuleInput {
 	result := make([]PolicyRuleInput, len(rules))
 	for i, r := range rules {
 		result[i] = PolicyRuleInput{
 			ID:            r.Id,
 			Pattern:       r.Pattern,
-			Action:        r.Action,
+			Action:        r.Action.String(),
 			Message:       r.Message,
 			Replacement:   r.Replacement,
 			CaseSensitive: r.CaseSensitive,
 		}
 	}
 	return result
+}
+
+func stringToPolicyType(s string) platonpb.PolicyType {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	switch s {
+	case "CONTENT", "POLICY_TYPE_CONTENT":
+		return platonpb.PolicyType_POLICY_TYPE_CONTENT
+	case "SAFETY", "POLICY_TYPE_SAFETY":
+		return platonpb.PolicyType_POLICY_TYPE_SAFETY
+	case "SCOPE", "POLICY_TYPE_SCOPE":
+		return platonpb.PolicyType_POLICY_TYPE_SCOPE
+	case "PII", "POLICY_TYPE_PII":
+		return platonpb.PolicyType_POLICY_TYPE_PII
+	case "CUSTOM", "POLICY_TYPE_CUSTOM":
+		return platonpb.PolicyType_POLICY_TYPE_CUSTOM
+	default:
+		return platonpb.PolicyType_POLICY_TYPE_UNKNOWN
+	}
+}
+
+func stringToPolicyAction(s string) platonpb.PolicyAction {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	switch s {
+	case "BLOCK", "POLICY_ACTION_BLOCK":
+		return platonpb.PolicyAction_POLICY_ACTION_BLOCK
+	case "ALLOW", "POLICY_ACTION_ALLOW":
+		return platonpb.PolicyAction_POLICY_ACTION_ALLOW
+	case "REDACT", "POLICY_ACTION_REDACT":
+		return platonpb.PolicyAction_POLICY_ACTION_REDACT
+	case "WARN", "POLICY_ACTION_WARN":
+		return platonpb.PolicyAction_POLICY_ACTION_WARN
+	case "LOG", "POLICY_ACTION_LOG":
+		return platonpb.PolicyAction_POLICY_ACTION_LOG
+	default:
+		return platonpb.PolicyAction_POLICY_ACTION_UNKNOWN
+	}
 }

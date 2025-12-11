@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	aristotelepb "github.com/msto63/mDW/api/gen/aristoteles"
 	turingpb "github.com/msto63/mDW/api/gen/turing"
 	"github.com/msto63/mDW/internal/turing/ollama"
 	"google.golang.org/grpc"
@@ -76,19 +77,31 @@ type Model struct {
 	turingAddr   string
 	ollamaClient *ollama.Client
 	useGRPC      bool
+
+	// Aristoteles Pipeline state
+	useAristoteles    bool   // Toggle für Aristoteles-Pipeline
+	aristotelesOnline bool   // Aristoteles-Service-Status
+	aristotelesAddr   string // Aristoteles gRPC address
+	lastIntentType    string // Letzter erkannter Intent-Typ
+	lastStrategyName  string // Letzte verwendete Strategie
+	lastQualityScore  float32 // Letzter Quality-Score
 }
 
 // Config holds ChatClient configuration
 type Config struct {
-	TuringAddr string
-	Model      string
+	TuringAddr      string
+	AristotelesAddr string
+	Model           string
+	UseAristoteles  bool // Default: use Aristoteles pipeline
 }
 
 // DefaultConfig returns default configuration
 func DefaultConfig() Config {
 	return Config{
-		TuringAddr: "localhost:9200",
-		Model:      "mistral:7b",
+		TuringAddr:      "localhost:9200",
+		AristotelesAddr: "localhost:9160",
+		Model:           "mistral:7b",
+		UseAristoteles:  false, // Default: direct Turing (toggle mit Ctrl+A)
 	}
 }
 
@@ -127,19 +140,31 @@ func New(cfg Config) Model {
 	// Load input history
 	inputHistory := LoadInputHistory()
 
+	// Apply defaults for empty addresses
+	turingAddr := cfg.TuringAddr
+	if turingAddr == "" {
+		turingAddr = DefaultConfig().TuringAddr
+	}
+	aristotelesAddr := cfg.AristotelesAddr
+	if aristotelesAddr == "" {
+		aristotelesAddr = DefaultConfig().AristotelesAddr
+	}
+
 	return Model{
-		textarea:        ta,
-		spinner:         sp,
-		messages:        []ChatMessage{},
-		currentModel:    model,
-		availableModels: defaultModels,
-		streamBuffer:    &strings.Builder{},
-		inputHistory:    inputHistory,
-		historyIndex:    -1, // -1 bedeutet: keine Historie-Navigation aktiv
-		turingAddr:      cfg.TuringAddr,
-		ollamaClient:    ollama.NewClient(ollama.DefaultConfig()),
-		useGRPC:         true,
-		focus:           FocusChat,
+		textarea:          ta,
+		spinner:           sp,
+		messages:          []ChatMessage{},
+		currentModel:      model,
+		availableModels:   defaultModels,
+		streamBuffer:      &strings.Builder{},
+		inputHistory:      inputHistory,
+		historyIndex:      -1, // -1 bedeutet: keine Historie-Navigation aktiv
+		turingAddr:        turingAddr,
+		aristotelesAddr:   aristotelesAddr,
+		ollamaClient:      ollama.NewClient(ollama.DefaultConfig()),
+		useGRPC:           true,
+		useAristoteles:    cfg.UseAristoteles,
+		focus:             FocusChat,
 	}
 }
 
@@ -149,6 +174,7 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 		m.spinner.Tick,
 		m.checkTuringStatus,
+		m.checkAristotelesStatus,
 		m.loadModels,
 		tea.EnterAltScreen,
 	)
@@ -263,10 +289,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.useGRPC = false
 		}
 
+	case aristotelesStatusMsg:
+		m.aristotelesOnline = msg.online
+		// Wenn Aristoteles offline ist und aktiviert war, deaktivieren
+		if !m.aristotelesOnline && m.useAristoteles {
+			m.useAristoteles = false
+		}
+
+	case aristotelesPipelineMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   "Aristoteles-Fehler: " + msg.err.Error(),
+				Timestamp: time.Now(),
+			})
+		} else {
+			// Pipeline-Metadaten speichern
+			m.lastIntentType = msg.intentType
+			m.lastStrategyName = msg.strategyName
+			m.lastQualityScore = msg.qualityScore
+
+			// Antwort mit Pipeline-Info anzeigen
+			content := msg.content
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "assistant",
+				Content:   content,
+				Model:     fmt.Sprintf("%s [%s, Q:%.0f%%]", m.currentModel, msg.strategyName, msg.qualityScore*100),
+				Timestamp: time.Now(),
+				Duration:  msg.duration,
+			})
+		}
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+
 	case tickMsg:
 		// Periodic status check
 		return m, tea.Batch(
 			m.checkTuringStatus,
+			m.checkAristotelesStatus,
 			tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
 				return tickMsg(t)
 			}),
@@ -373,6 +435,35 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Check for Ctrl+A (Aristoteles toggle)
+	if msg.String() == "ctrl+a" {
+		if m.aristotelesOnline {
+			m.useAristoteles = !m.useAristoteles
+			var statusMsg string
+			if m.useAristoteles {
+				statusMsg = "Aristoteles-Pipeline aktiviert (intelligentes Prompt-Routing)"
+			} else {
+				statusMsg = "Aristoteles-Pipeline deaktiviert (direkt zu Turing)"
+			}
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   statusMsg,
+				Timestamp: time.Now(),
+			})
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		} else {
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   "Aristoteles-Service nicht verfügbar",
+				Timestamp: time.Now(),
+			})
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+
 	// Chat input handling
 	if m.focus == FocusChat && !m.loading && !m.streaming {
 		switch msg.Type {
@@ -400,10 +491,20 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Timestamp: time.Now(),
 				})
 				m.textarea.Reset()
-				m.streaming = true
-				m.streamBuffer.Reset()
 				m.updateViewportContent()
 				m.viewport.GotoBottom()
+
+				// Entscheide zwischen Aristoteles-Pipeline und direktem Streaming
+				if m.useAristoteles && m.aristotelesOnline {
+					m.loading = true
+					return m, tea.Batch(
+						m.spinner.Tick,
+						m.sendMessageViaAristoteles(input),
+					)
+				}
+				// Standard: Direktes Streaming via Turing/Ollama
+				m.streaming = true
+				m.streamBuffer.Reset()
 				return m, tea.Batch(
 					m.spinner.Tick,
 					m.sendMessageWithStreaming(input),
@@ -607,23 +708,33 @@ func (m Model) renderInputArea() string {
 
 // renderStatusBar renders the status bar with current model and version
 func (m Model) renderStatusBar() string {
-	// Left: Model info
+	// Left: Model info with Aristoteles indicator
 	modelInfo := IconModel + SelectedModelItemStyle.Render(m.currentModel)
+	if m.useAristoteles {
+		modelInfo += HelpDescStyle.Render(" [Pipeline]")
+	}
 
-	// Center: Version info
-	versionInfo := HelpDescStyle.Render("v" + Version)
+	// Center: Version info + Pipeline status
+	var centerInfo string
+	if m.useAristoteles && m.lastStrategyName != "" {
+		centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | %s Q:%.0f%%", Version, m.lastStrategyName, m.lastQualityScore*100))
+	} else {
+		centerInfo = HelpDescStyle.Render("v" + Version)
+	}
 
-	// Right: Connection status
+	// Right: Connection status with Aristoteles
 	var status string
-	if m.turingOnline {
+	if m.useAristoteles && m.aristotelesOnline {
+		status = StatusOnlineStyle.Render(IconOnline + "Aristoteles")
+	} else if m.turingOnline {
 		status = StatusOnlineStyle.Render(IconOnline + "Turing")
 	} else {
 		status = StatusOfflineStyle.Render(IconOffline + "Ollama")
 	}
 
 	// Build the status bar
-	leftPart := ModelLabelStyle.Render("Aktives Modell: ") + modelInfo
-	centerPart := versionInfo
+	leftPart := ModelLabelStyle.Render("Modell: ") + modelInfo
+	centerPart := centerInfo
 	rightPart := status
 
 	// Calculate padding
@@ -654,12 +765,19 @@ func (m Model) renderHelpBar() string {
 			RenderKeyHint("Esc", "schließen"),
 		}
 	} else {
+		// Aristoteles-Status im Hint anzeigen
+		var aristotelesHint string
+		if m.useAristoteles {
+			aristotelesHint = "Pipeline aus"
+		} else {
+			aristotelesHint = "Pipeline an"
+		}
 		items = []string{
 			RenderKeyHint("Enter", "senden"),
 			RenderKeyHint("↑/↓", "Historie"),
 			RenderKeyHint("Ctrl+O", "Modell"),
+			RenderKeyHint("Ctrl+A", aristotelesHint),
 			RenderKeyHint("Ctrl+L", "leeren"),
-			RenderKeyHint("PgUp/Dn", "scrollen"),
 			RenderKeyHint("Ctrl+C", "beenden"),
 		}
 	}
@@ -893,6 +1011,89 @@ func (m Model) loadModels() tea.Msg {
 	}
 
 	return modelsLoadedMsg{models: modelInfos}
+}
+
+// checkAristotelesStatus checks if Aristoteles service is available
+func (m Model) checkAristotelesStatus() tea.Msg {
+	conn, err := m.dialAristotelesGRPC()
+	if err != nil {
+		return aristotelesStatusMsg{online: false, err: err}
+	}
+	conn.Close()
+	return aristotelesStatusMsg{online: true}
+}
+
+// dialAristotelesGRPC creates a gRPC connection to Aristoteles
+func (m *Model) dialAristotelesGRPC() (*grpc.ClientConn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	return grpc.DialContext(ctx, m.aristotelesAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+}
+
+// sendMessageViaAristoteles sends a message through the Aristoteles pipeline
+func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
+	return func() tea.Msg {
+		startTime := time.Now()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		conn, err := m.dialAristotelesGRPC()
+		if err != nil {
+			return aristotelesPipelineMsg{err: fmt.Errorf("Aristoteles-Verbindungsfehler: %w", err)}
+		}
+		defer conn.Close()
+
+		client := aristotelepb.NewAristotelesServiceClient(conn)
+
+		// Build request
+		req := &aristotelepb.ProcessRequest{
+			RequestId: fmt.Sprintf("chat-%d", time.Now().UnixNano()),
+			Prompt:    input,
+			Options: &aristotelepb.ProcessOptions{
+				ForceModel: m.currentModel,
+			},
+		}
+
+		// Call Aristoteles
+		resp, err := client.Process(ctx, req)
+		if err != nil {
+			return aristotelesPipelineMsg{err: fmt.Errorf("Pipeline-Fehler: %w", err)}
+		}
+
+		// Extract enrichments
+		var enrichments []string
+		for _, e := range resp.Enrichments {
+			enrichments = append(enrichments, e.Type.String())
+		}
+
+		// Extract intent and strategy info
+		intentType := "UNKNOWN"
+		if resp.Intent != nil {
+			intentType = resp.Intent.Primary.String()
+		}
+		strategyName := "direct"
+		if resp.Strategy != nil {
+			strategyName = resp.Strategy.Name
+		}
+		qualityScore := float32(0.0)
+		if resp.Metrics != nil {
+			qualityScore = resp.Metrics.QualityScore
+		}
+
+		return aristotelesPipelineMsg{
+			content:      resp.Response,
+			intentType:   intentType,
+			strategyName: strategyName,
+			qualityScore: qualityScore,
+			duration:     time.Since(startTime),
+			enrichments:  enrichments,
+		}
+	}
 }
 
 // Run starts the ChatClient TUI

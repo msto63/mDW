@@ -158,6 +158,16 @@ func (a *Agent) SetModel(model string) {
 	a.model = model
 }
 
+// SetSystemPrompt sets the system prompt for this agent
+func (a *Agent) SetSystemPrompt(prompt string) {
+	a.systemPrompt = prompt
+}
+
+// GetSystemPrompt returns the current system prompt
+func (a *Agent) GetSystemPrompt() string {
+	return a.systemPrompt
+}
+
 // GetModel returns the current model
 func (a *Agent) GetModel() string {
 	return a.model
@@ -302,18 +312,43 @@ func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
 			// Add observation to conversation
 			observation := formatObservation(stepResult.ToolResult)
 			messages = append(messages, Message{Role: "assistant", Content: response})
-			messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("OBSERVATION: %s", observation)})
+
+			// Count how many search tool calls we've done
+			searchCount := 0
+			for _, s := range execution.Steps {
+				if s.ToolCall != nil && (s.ToolCall.Name == "web_search" || s.ToolCall.Name == "search_news") {
+					searchCount++
+				}
+			}
+			// Include current call if it's a search
+			if stepResult.ToolCall.Name == "web_search" || stepResult.ToolCall.Name == "search_news" {
+				searchCount++
+			}
+
+			// Add urgency hint after first search to encourage FINAL_ANSWER
+			observationMsg := fmt.Sprintf("OBSERVATION: %s", observation)
+			if searchCount >= 1 && (stepResult.ToolCall.Name == "web_search" || stepResult.ToolCall.Name == "search_news") {
+				observationMsg += "\n\nHINWEIS: Du hast bereits Suchergebnisse erhalten. Fasse diese jetzt mit FINAL_ANSWER zusammen! Führe KEINE weitere Suche durch."
+			}
+			messages = append(messages, Message{Role: "user", Content: observationMsg})
 		}
 
 		execution.Steps = append(execution.Steps, stepResult)
 	}
 
-	// Max steps reached
-	execution.Status = StatusFailed
-	execution.Error = "max steps reached"
+	// Max steps reached - try to provide a result based on collected observations
+	execution.Status = StatusCompleted
+	execution.Error = "max steps reached, result based on partial observations"
 	execution.EndedAt = time.Now()
+	execution.Result = a.synthesizePartialResult(execution.Steps)
 
-	return execution, fmt.Errorf("max steps reached without completion")
+	a.logger.Warn("Agent reached max steps without FINAL_ANSWER, synthesizing partial result",
+		"id", execution.ID,
+		"steps", len(execution.Steps),
+		"tools_used", execution.ToolsUsed,
+	)
+
+	return execution, nil
 }
 
 // buildSystemPrompt builds the system prompt with tool descriptions
@@ -400,4 +435,29 @@ func extractFinalAnswer(call *ToolCall) string {
 	}
 	data, _ := json.Marshal(call.Params)
 	return string(data)
+}
+
+// synthesizePartialResult creates a result from tool observations when max steps is reached
+func (a *Agent) synthesizePartialResult(steps []Step) string {
+	var sb strings.Builder
+	sb.WriteString("Basierend auf der durchgeführten Recherche:\n\n")
+
+	hasResults := false
+	for _, step := range steps {
+		if step.ToolResult != nil && step.ToolResult.Error == "" && step.ToolResult.Result != nil {
+			// Include tool results
+			resultStr := formatObservation(step.ToolResult)
+			if len(resultStr) > 0 && resultStr != "No result" {
+				hasResults = true
+				sb.WriteString(resultStr)
+				sb.WriteString("\n\n")
+			}
+		}
+	}
+
+	if !hasResults {
+		return "Die Recherche konnte keine Ergebnisse liefern. Bitte versuchen Sie es mit einer anderen Suchanfrage."
+	}
+
+	return sb.String()
 }
