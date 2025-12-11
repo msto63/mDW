@@ -4,6 +4,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	pb "github.com/msto63/mDW/api/gen/aristoteles"
@@ -11,6 +12,7 @@ import (
 	hypatiapb "github.com/msto63/mDW/api/gen/hypatia"
 	leibnizpb "github.com/msto63/mDW/api/gen/leibniz"
 	turingpb "github.com/msto63/mDW/api/gen/turing"
+	"github.com/msto63/mDW/internal/aristoteles/orchestrator"
 	"github.com/msto63/mDW/internal/aristoteles/pipeline"
 	"github.com/msto63/mDW/pkg/core/logging"
 )
@@ -23,6 +25,8 @@ type TuringClient interface {
 // LeibnizClient is the interface for Leibniz service calls
 type LeibnizClient interface {
 	Execute(ctx context.Context, req *leibnizpb.ExecuteRequest) (*leibnizpb.ExecuteResponse, error)
+	FindBestAgent(ctx context.Context, req *leibnizpb.FindAgentRequest) (*leibnizpb.AgentMatchResponse, error)
+	FindTopAgents(ctx context.Context, req *leibnizpb.FindTopAgentsRequest) (*leibnizpb.AgentMatchListResponse, error)
 }
 
 // HypatiaClient is the interface for Hypatia service calls
@@ -38,23 +42,33 @@ type BabbageClient interface {
 
 // Router routes requests to the appropriate service
 type Router struct {
-	turingClient  TuringClient
-	leibnizClient LeibnizClient
-	hypatiaClient HypatiaClient
-	babbageClient BabbageClient
-	logger        *logging.Logger
-	timeout       time.Duration
+	turingClient         TuringClient
+	leibnizClient        LeibnizClient
+	hypatiaClient        HypatiaClient
+	babbageClient        BabbageClient
+	orchestrator         *orchestrator.Orchestrator
+	logger               *logging.Logger
+	timeout              time.Duration
+	enableAutoAgentMatch bool    // Enable RAG-style agent matching
+	minAgentConfidence   float64 // Minimum confidence for agent matching
+	enableOrchestrator   bool    // Enable multi-task orchestration
 }
 
 // Config holds router configuration
 type Config struct {
-	DefaultTimeout time.Duration
+	DefaultTimeout       time.Duration
+	EnableAutoAgentMatch bool    // Enable RAG-style agent matching
+	MinAgentConfidence   float64 // Minimum confidence for agent matching (0.0-1.0)
+	EnableOrchestrator   bool    // Enable multi-task orchestration for complex prompts
 }
 
 // DefaultConfig returns default router configuration
 func DefaultConfig() *Config {
 	return &Config{
-		DefaultTimeout: 180 * time.Second, // Increased for agent tasks like web research
+		DefaultTimeout:       180 * time.Second, // Increased for agent tasks like web research
+		EnableAutoAgentMatch: true,              // Enable automatic agent selection
+		MinAgentConfidence:   0.3,               // 30% minimum confidence
+		EnableOrchestrator:   true,              // Enable task decomposition and multi-agent orchestration
 	}
 }
 
@@ -63,20 +77,86 @@ func NewRouter(cfg *Config) *Router {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
-	return &Router{
-		logger:  logging.New("aristoteles-router"),
-		timeout: cfg.DefaultTimeout,
+
+	r := &Router{
+		logger:               logging.New("aristoteles-router"),
+		timeout:              cfg.DefaultTimeout,
+		enableAutoAgentMatch: cfg.EnableAutoAgentMatch,
+		minAgentConfidence:   cfg.MinAgentConfidence,
+		enableOrchestrator:   cfg.EnableOrchestrator,
 	}
+
+	// Initialize orchestrator if enabled
+	if cfg.EnableOrchestrator {
+		r.orchestrator = orchestrator.NewOrchestrator(orchestrator.Config{
+			DefaultAgentID: "default",
+			MinConfidence:  cfg.MinAgentConfidence,
+		})
+	}
+
+	return r
 }
 
 // SetTuringClient sets the Turing client
 func (r *Router) SetTuringClient(client TuringClient) {
 	r.turingClient = client
+
+	// Configure orchestrator's decomposer with LLM function
+	if r.orchestrator != nil && client != nil {
+		r.orchestrator.SetDecomposerLLM(func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+			resp, err := client.Chat(ctx, &turingpb.ChatRequest{
+				Model: "mistral:7b", // Use fast model for decomposition
+				Messages: []*turingpb.Message{
+					{Role: "system", Content: systemPrompt},
+					{Role: "user", Content: userPrompt},
+				},
+				Temperature: 0.1, // Low temperature for structured output
+				MaxTokens:   1000,
+			})
+			if err != nil {
+				return "", err
+			}
+			return resp.Content, nil
+		})
+		r.logger.Debug("Orchestrator decomposer configured with Turing LLM")
+	}
 }
 
 // SetLeibnizClient sets the Leibniz client
 func (r *Router) SetLeibnizClient(client LeibnizClient) {
 	r.leibnizClient = client
+
+	// Configure orchestrator with Leibniz functions
+	if r.orchestrator != nil && client != nil {
+		// Agent Matcher: Find best agent for a task description
+		r.orchestrator.SetAgentMatcher(func(ctx context.Context, taskDescription string) (*orchestrator.AgentMatch, error) {
+			resp, err := client.FindBestAgent(ctx, &leibnizpb.FindAgentRequest{
+				TaskDescription: taskDescription,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &orchestrator.AgentMatch{
+				AgentID:    resp.AgentId,
+				AgentName:  resp.AgentName,
+				Similarity: resp.Similarity,
+			}, nil
+		})
+
+		// Agent Executor: Execute a task with a specific agent
+		r.orchestrator.SetAgentExecutor(func(ctx context.Context, agentID, prompt string) (string, error) {
+			resp, err := client.Execute(ctx, &leibnizpb.ExecuteRequest{
+				AgentId: agentID,
+				Message: prompt,
+			})
+			if err != nil {
+				return "", err
+			}
+			return resp.Response, nil
+		})
+
+		r.logger.Info("Orchestrator configured with Leibniz client")
+	}
 }
 
 // SetHypatiaClient sets the Hypatia client
@@ -173,9 +253,136 @@ func (r *Router) routeToLeibniz(ctx context.Context, pctx *pipeline.Context) err
 		return fmt.Errorf("leibniz client not available")
 	}
 
+	// Check if this is a multi-step task that should use the orchestrator
+	// Only use orchestrator if:
+	// 1. Orchestrator is enabled and configured
+	// 2. Intent is TASK_DECOMPOSITION or MULTI_STEP
+	// 3. No forced agent is specified (manual selection bypasses orchestration)
+	useOrchestrator := r.shouldUseOrchestrator(pctx)
+
+	if useOrchestrator {
+		return r.routeViaOrchestrator(ctx, pctx)
+	}
+
+	// Standard single-agent routing
+	return r.routeToLeibnizSingle(ctx, pctx)
+}
+
+// shouldUseOrchestrator checks if the orchestrator should be used for this request
+func (r *Router) shouldUseOrchestrator(pctx *pipeline.Context) bool {
+	// Orchestrator must be enabled and configured
+	if !r.enableOrchestrator || r.orchestrator == nil {
+		return false
+	}
+
+	// Manual agent selection bypasses orchestration
+	if pctx.Options != nil && pctx.Options.ForceAgent != "" {
+		return false
+	}
+
+	// Check intent type
+	if pctx.Intent == nil {
+		return false
+	}
+
+	// Use orchestrator for multi-step and task decomposition intents
+	switch pctx.Intent.Primary {
+	case pb.IntentType_INTENT_TYPE_TASK_DECOMPOSITION,
+		pb.IntentType_INTENT_TYPE_MULTI_STEP:
+		return true
+	}
+
+	return false
+}
+
+// routeViaOrchestrator uses the orchestrator for multi-task execution
+func (r *Router) routeViaOrchestrator(ctx context.Context, pctx *pipeline.Context) error {
+	r.logger.Info("Using orchestrator for multi-task execution",
+		"intent", pctx.Intent.Primary.String())
+
+	result, err := r.orchestrator.Process(ctx, pctx.GetEnrichedPrompt())
+	if err != nil {
+		// Fallback to single-agent if orchestration fails
+		r.logger.Warn("Orchestration failed, falling back to single-agent",
+			"error", err)
+		return r.routeToLeibnizSingle(ctx, pctx)
+	}
+
+	// Build response from orchestration result
+	pctx.Response = result.FinalOutput
+
+	// Collect agent info from all tasks
+	var agentIDs, agentNames []string
+	for _, task := range result.Plan.Tasks {
+		agentIDs = append(agentIDs, task.AssignedAgentID)
+		agentNames = append(agentNames, task.AgentName)
+	}
+
+	pctx.Route = &pb.RouteInfo{
+		Service:    pb.TargetService_TARGET_LEIBNIZ,
+		Endpoint:   "Orchestrator",
+		AgentId:    strings.Join(agentIDs, ","),
+		DurationMs: result.TotalDuration.Milliseconds(),
+	}
+
+	// Store orchestration info in metadata
+	if pctx.Metadata == nil {
+		pctx.Metadata = make(map[string]string)
+	}
+	pctx.Metadata["orchestration_mode"] = "multi_task"
+	pctx.Metadata["task_count"] = fmt.Sprintf("%d", len(result.Plan.Tasks))
+	pctx.Metadata["agents_used"] = strings.Join(agentNames, ", ")
+	if result.Plan.IsSequential {
+		pctx.Metadata["execution_mode"] = "sequential"
+	} else {
+		pctx.Metadata["execution_mode"] = "parallel"
+	}
+
+	r.logger.Info("Orchestration completed",
+		"tasks", len(result.Plan.Tasks),
+		"agents", strings.Join(agentNames, ", "),
+		"duration_ms", result.TotalDuration.Milliseconds())
+
+	return nil
+}
+
+// routeToLeibnizSingle routes to a single agent (original behavior)
+func (r *Router) routeToLeibnizSingle(ctx context.Context, pctx *pipeline.Context) error {
 	agentID := "default"
-	if len(pctx.Strategy.Agents) > 0 {
+	agentName := "Default Agent"
+	confidence := float64(0)
+
+	// Priority 1: Use forced agent from options (UI manual selection)
+	if pctx.Options != nil && pctx.Options.ForceAgent != "" {
+		agentID = pctx.Options.ForceAgent
+		agentName = "Manuell ausgewählt"
+		confidence = 1.0 // 100% confidence for manual selection
+		r.logger.Info("Using forced agent from options", "agent", agentID)
+	} else if len(pctx.Strategy.Agents) > 0 {
+		// Priority 2: Use explicit agent if specified in strategy
 		agentID = pctx.Strategy.Agents[0]
+		r.logger.Debug("Using strategy-specified agent", "agent", agentID)
+	} else if r.enableAutoAgentMatch {
+		// Priority 3: RAG-style automatic agent selection
+		matchResp, err := r.leibnizClient.FindBestAgent(ctx, &leibnizpb.FindAgentRequest{
+			TaskDescription: pctx.Prompt,
+		})
+		if err != nil {
+			r.logger.Warn("Agent matching failed, using default", "error", err)
+		} else if matchResp.Similarity >= r.minAgentConfidence {
+			agentID = matchResp.AgentId
+			agentName = matchResp.AgentName
+			confidence = matchResp.Similarity
+			r.logger.Info("Agent auto-selected via embedding similarity",
+				"agent", agentID,
+				"name", agentName,
+				"confidence", fmt.Sprintf("%.2f%%", confidence*100))
+		} else {
+			r.logger.Debug("Agent confidence too low, using default",
+				"matched_agent", matchResp.AgentId,
+				"confidence", matchResp.Similarity,
+				"threshold", r.minAgentConfidence)
+		}
 	}
 
 	req := &leibnizpb.ExecuteRequest{
@@ -195,6 +402,16 @@ func (r *Router) routeToLeibniz(ctx context.Context, pctx *pipeline.Context) err
 		Endpoint:  "Execute",
 		AgentId:   agentID,
 		TokensOut: resp.TotalTokens,
+	}
+
+	// Store agent match info in metadata for UI display
+	if confidence > 0 {
+		if pctx.Metadata == nil {
+			pctx.Metadata = make(map[string]string)
+		}
+		pctx.Metadata["matched_agent_id"] = agentID
+		pctx.Metadata["matched_agent_name"] = agentName
+		pctx.Metadata["agent_confidence"] = fmt.Sprintf("%.2f", confidence)
 	}
 
 	return nil

@@ -78,8 +78,8 @@ func TestGetAgentDefinition(t *testing.T) {
 	}{
 		{"ID", def.ID, "web-researcher"},
 		{"Name contains Web", strings.Contains(def.Name, "Web") || strings.Contains(def.Name, "Recherche"), true},
-		{"MaxSteps", def.MaxSteps, 8},
-		{"Timeout", def.Timeout, 120 * time.Second},
+		{"MaxSteps", def.MaxSteps, 12},
+		{"Timeout", def.Timeout, 300 * time.Second},
 	}
 
 	for _, tt := range tests {

@@ -127,23 +127,30 @@ func NewModel(cfg Config) Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(ColorPrimary)
 
-	// Initialize text inputs
+	// Initialize text inputs with better styling
 	nameInput := textinput.New()
 	nameInput.Placeholder = "Agent Name"
 	nameInput.CharLimit = 64
-	nameInput.Width = 40
+	nameInput.Width = 60
+	nameInput.Prompt = ""
+	nameInput.TextStyle = lipgloss.NewStyle().Foreground(ColorText)
+	nameInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(ColorTextDim)
 
 	descInput := textinput.New()
-	descInput.Placeholder = "Beschreibung"
+	descInput.Placeholder = "Beschreibung des Agenten"
 	descInput.CharLimit = 200
-	descInput.Width = 40
+	descInput.Width = 60
+	descInput.Prompt = ""
+	descInput.TextStyle = lipgloss.NewStyle().Foreground(ColorText)
+	descInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(ColorTextDim)
 
-	// Initialize textarea for system prompt
+	// Initialize textarea for system prompt with better sizing
 	systemPrompt := textarea.New()
-	systemPrompt.Placeholder = "System Prompt..."
+	systemPrompt.Placeholder = "System Prompt - Beschreibe das Verhalten und die Rolle des Agenten..."
 	systemPrompt.CharLimit = 10000
-	systemPrompt.SetWidth(60)
-	systemPrompt.SetHeight(10)
+	systemPrompt.SetWidth(80)
+	systemPrompt.SetHeight(12)
+	systemPrompt.ShowLineNumbers = false
 
 	// Initialize test input
 	testInput := textinput.New()
@@ -239,8 +246,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update component sizes
 		m.agentList.SetSize(30, m.height-6)
 		m.viewport = viewport.New(m.width-35, m.height-6)
-		m.systemPrompt.SetWidth(m.width - 45)
-		m.systemPrompt.SetHeight(8)
+
+		// Calculate dynamic widths for editor fields
+		editorWidth := min(m.width-10, 80)
+		m.nameInput.Width = editorWidth - 4
+		m.descInput.Width = editorWidth - 4
+		m.systemPrompt.SetWidth(editorWidth - 4)
+		m.systemPrompt.SetHeight(max(8, m.height/4))
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -445,12 +457,12 @@ func (m Model) updateEditorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg.String() {
-	case "tab", "down":
+	case "tab":
 		m.editorField = (m.editorField + 1) % (FieldCancel + 1)
 		m.updateEditorFocus()
 		return m, nil
 
-	case "shift+tab", "up":
+	case "shift+tab":
 		if m.editorField == 0 {
 			m.editorField = FieldCancel
 		} else {
@@ -458,6 +470,28 @@ func (m Model) updateEditorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.updateEditorFocus()
 		return m, nil
+
+	case "up":
+		// Only navigate fields for non-text fields
+		switch m.editorField {
+		case FieldModel, FieldTemperature, FieldMaxIterations, FieldTimeout, FieldTools, FieldSave, FieldCancel:
+			if m.editorField == 0 {
+				m.editorField = FieldCancel
+			} else {
+				m.editorField--
+			}
+			m.updateEditorFocus()
+			return m, nil
+		}
+
+	case "down":
+		// Only navigate fields for non-text fields
+		switch m.editorField {
+		case FieldModel, FieldTemperature, FieldMaxIterations, FieldTimeout, FieldTools, FieldSave, FieldCancel:
+			m.editorField = (m.editorField + 1) % (FieldCancel + 1)
+			m.updateEditorFocus()
+			return m, nil
+		}
 
 	case "ctrl+s", "enter":
 		if m.editorField == FieldSave || msg.String() == "ctrl+s" {
@@ -676,14 +710,40 @@ func (m Model) viewEditor() string {
 	b.WriteString(TitlePanelStyle.Render(LogoStyle.Render(title)))
 	b.WriteString("\n\n")
 
-	// Form fields
+	// Calculate dynamic width for input fields
+	editorWidth := min(m.width-10, 80)
+
+	// Helper function to render field with border
+	renderField := func(label string, content string, field EditorField, isTextInput bool) string {
+		labelStyle := LabelStyle
+		if m.editorField == field {
+			labelStyle = LabelStyle.Copy().Foreground(ColorPrimary).Bold(true)
+		}
+		labelStr := labelStyle.Render(label)
+
+		if isTextInput {
+			// Wrap text inputs in a bordered box
+			borderStyle := InputBorderStyle.Width(editorWidth)
+			if m.editorField == field {
+				borderStyle = InputBorderFocusedStyle.Width(editorWidth)
+			}
+			return labelStr + "\n" + borderStyle.Render(content) + "\n"
+		}
+		return labelStr + " " + content + "\n"
+	}
+
+	// Name field with border
+	b.WriteString(renderField("Name:", m.nameInput.View(), FieldName, true))
+
+	// Description field with border
+	b.WriteString(renderField("Beschreibung:", m.descInput.View(), FieldDescription, true))
+
+	// Non-text fields
 	fields := []struct {
 		label   string
 		content string
 		field   EditorField
 	}{
-		{"Name:", m.nameInput.View(), FieldName},
-		{"Beschreibung:", m.descInput.View(), FieldDescription},
 		{"Modell:", m.renderModelSelector(), FieldModel},
 		{"Temperature:", m.renderSlider(m.temperature, 0, 2, 20), FieldTemperature},
 		{"Max Steps:", m.renderSlider(float32(m.maxIterations), 1, 50, 20), FieldMaxIterations},
@@ -698,7 +758,7 @@ func (m Model) viewEditor() string {
 		b.WriteString(label + " " + f.content + "\n")
 	}
 
-	// System Prompt
+	// System Prompt with border
 	b.WriteString("\n")
 	promptLabel := "System Prompt:"
 	if m.editorField == FieldSystemPrompt {
@@ -707,7 +767,13 @@ func (m Model) viewEditor() string {
 		promptLabel = LabelStyle.Render(promptLabel)
 	}
 	b.WriteString(promptLabel + "\n")
-	b.WriteString(m.systemPrompt.View())
+
+	// Wrap system prompt in bordered box
+	promptBorderStyle := TextAreaBorderStyle.Width(editorWidth)
+	if m.editorField == FieldSystemPrompt {
+		promptBorderStyle = TextAreaBorderFocusedStyle.Width(editorWidth)
+	}
+	b.WriteString(promptBorderStyle.Render(m.systemPrompt.View()))
 	b.WriteString("\n\n")
 
 	// Tools
@@ -718,11 +784,15 @@ func (m Model) viewEditor() string {
 		toolsLabel = LabelStyle.Render(toolsLabel)
 	}
 	selectedTools := m.getSelectedToolNames()
-	if len(selectedTools) == 0 {
-		b.WriteString(toolsLabel + " " + HelpDescStyle.Render("(keine ausgewaehlt - Enter zum Auswaehlen)") + "\n")
-	} else {
-		b.WriteString(toolsLabel + " " + strings.Join(selectedTools, ", ") + "\n")
+	toolContent := HelpDescStyle.Render("(keine - Enter zum Auswaehlen)")
+	if len(selectedTools) > 0 {
+		toolContent = strings.Join(selectedTools, ", ")
 	}
+	toolsBorderStyle := ToolsFieldStyle.Width(editorWidth)
+	if m.editorField == FieldTools {
+		toolsBorderStyle = ToolsFieldFocusedStyle.Width(editorWidth)
+	}
+	b.WriteString(toolsLabel + "\n" + toolsBorderStyle.Render(toolContent) + "\n")
 
 	// Buttons
 	b.WriteString("\n")
@@ -739,7 +809,7 @@ func (m Model) viewEditor() string {
 	// Help
 	b.WriteString("\n")
 	b.WriteString(HelpStyle.Render(
-		RenderKeyHint("Tab", "Naechstes") + "  " +
+		RenderKeyHint("Tab/Shift+Tab", "Navigation") + "  " +
 			RenderKeyHint("Ctrl+S", "Speichern") + "  " +
 			RenderKeyHint("Esc", "Abbrechen")))
 
@@ -1116,6 +1186,7 @@ func createAgent(leibnizAddr string, agent AgentData) tea.Cmd {
 				MaxIterations:  int32(agent.MaxIterations),
 				TimeoutSeconds: int32(agent.TimeoutSeconds),
 			},
+			SaveAsYaml: true, // Always save as YAML for hot-reload support
 		}
 
 		resp, err := client.CreateAgent(ctx, req)
@@ -1164,6 +1235,7 @@ func updateAgent(leibnizAddr string, agent AgentData) tea.Cmd {
 				MaxIterations:  int32(agent.MaxIterations),
 				TimeoutSeconds: int32(agent.TimeoutSeconds),
 			},
+			SaveAsYaml: true, // Always save as YAML for hot-reload support
 		}
 
 		resp, err := client.UpdateAgent(ctx, req)

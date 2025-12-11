@@ -94,7 +94,8 @@ var (
 var (
 	LabelStyle = lipgloss.NewStyle().
 			Foreground(ColorTextMuted).
-			Width(16)
+			Width(16).
+			MarginBottom(0)
 
 	InputStyle = lipgloss.NewStyle().
 			Foreground(ColorText).
@@ -108,10 +109,47 @@ var (
 				BorderForeground(ColorPrimary).
 				Padding(0, 1)
 
+	// Border styles for text inputs
+	InputBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorDimmed).
+				Padding(0, 1).
+				Width(64)
+
+	InputBorderFocusedStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorPrimary).
+				Padding(0, 1).
+				Width(64)
+
+	// Border styles for textarea (system prompt)
+	TextAreaBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorDimmed).
+				Padding(0, 1)
+
+	TextAreaBorderFocusedStyle = lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(ColorPrimary).
+					Padding(0, 1)
+
 	TextAreaStyle = lipgloss.NewStyle().
 			Foreground(ColorText).
 			Background(ColorBgPanel).
 			Padding(1)
+
+	// Tools field styles
+	ToolsFieldStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorDimmed).
+			Padding(0, 1).
+			Width(64)
+
+	ToolsFieldFocusedStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorPrimary).
+				Padding(0, 1).
+				Width(64)
 
 	SliderTrackStyle = lipgloss.NewStyle().
 				Foreground(ColorDimmed)

@@ -134,7 +134,7 @@ func (s *Selector) initDefaultStrategies(cfg *Config) {
 	s.mappings[pb.IntentType_INTENT_TYPE_RAG_QUERY] = "rag_query"
 	s.mappings[pb.IntentType_INTENT_TYPE_FACTUAL] = "rag_query"
 
-	// Task decomposition strategy - uses Leibniz agent service
+	// Task decomposition strategy - uses Leibniz agent service with auto-selection
 	s.strategies["task_decomposition"] = &pb.StrategyInfo{
 		Id:                 "task_decomposition",
 		Name:               "Task Decomposition",
@@ -142,7 +142,7 @@ func (s *Selector) initDefaultStrategies(cfg *Config) {
 		Model:              cfg.ModelMappings["TASK_DECOMPOSITION"],
 		FallbackModel:      "mistral:7b",
 		Target:             pb.TargetService_TARGET_LEIBNIZ,
-		Agents:             []string{"task-planner"},
+		Agents:             []string{}, // Leeres Array = automatische Agent-Auswahl via Embedding-Matching
 		RequiresEnrichment: true,
 		Temperature:        0.4,
 		MaxTokens:          4096,

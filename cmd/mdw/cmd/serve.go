@@ -17,6 +17,7 @@ import (
 	hypatiaService "github.com/msto63/mDW/internal/hypatia/service"
 	kantServer "github.com/msto63/mDW/internal/kant/server"
 	leibnizAgent "github.com/msto63/mDW/internal/leibniz/agent"
+	"github.com/msto63/mDW/internal/leibniz/agentloader"
 	leibnizServer "github.com/msto63/mDW/internal/leibniz/server"
 	"github.com/msto63/mDW/internal/leibniz/servicetools"
 	platonServer "github.com/msto63/mDW/internal/platon/server"
@@ -547,10 +548,50 @@ func startLeibniz(ctx context.Context) error {
 	})
 	svcTools.RegisterAll(srv.Agent())
 
+	// Create embedding function for agent matching (RAG-style agent selection)
+	// This enables dynamic agent selection based on task similarity
+	embeddingFunc := func(ctx context.Context, texts []string) ([][]float64, error) {
+		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		conn, err := grpc.DialContext(dialCtx, turingAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithBlock(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to Turing for embeddings: %w", err)
+		}
+		defer conn.Close()
+
+		client := turingpb.NewTuringServiceClient(conn)
+
+		// Use BatchEmbed for multiple texts
+		resp, err := client.BatchEmbed(ctx, &turingpb.BatchEmbedRequest{
+			Model:  "nomic-embed-text",
+			Inputs: texts,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("embedding failed: %w", err)
+		}
+
+		// Convert response to [][]float64
+		embeddings := make([][]float64, len(resp.Embeddings))
+		for i, emb := range resp.Embeddings {
+			embeddings[i] = make([]float64, len(emb.Embedding))
+			for j, v := range emb.Embedding {
+				embeddings[i][j] = float64(v)
+			}
+		}
+		return embeddings, nil
+	}
+
+	// Set embedding function on Leibniz service for intelligent agent matching
+	srv.Service().SetEmbeddingFunc(agentloader.EmbeddingFunc(embeddingFunc))
+
 	// Pipeline processing is now handled by Platon service
 	// Leibniz connects to Platon via gRPC for pre-/post-processing
 
-	fmt.Printf("  [+] Leibniz (Agentic AI) auf :%d (→ Turing, Hypatia, Babbage, Platon)\n", cfg.Port)
+	fmt.Printf("  [+] Leibniz (Agentic AI) auf :%d (→ Turing, Hypatia, Babbage, Platon, Agent-Embeddings)\n", cfg.Port)
 	if err := srv.StartAsync(); err != nil {
 		return err
 	}

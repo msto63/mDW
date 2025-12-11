@@ -43,6 +43,16 @@ func (s *Server) CreateAgent(ctx context.Context, req *pb.CreateAgentRequest) (*
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// Save as YAML file if requested (enables hot-reload)
+	if req.SaveAsYaml {
+		if err := s.service.SaveAgentAsYAML(created); err != nil {
+			s.logger.Warn("Failed to save agent as YAML", "id", created.ID, "error", err)
+			// Don't fail the request, just log the warning
+		} else {
+			s.logger.Info("Agent saved as YAML for hot-reload", "id", created.ID)
+		}
+	}
+
 	return agentToProto(created), nil
 }
 
@@ -71,6 +81,15 @@ func (s *Server) UpdateAgent(ctx context.Context, req *pb.UpdateAgentRequest) (*
 	if err != nil {
 		s.logger.Error("UpdateAgent failed", "error", err)
 		return nil, status.Error(codes.NotFound, err.Error())
+	}
+
+	// Save as YAML file if requested (enables hot-reload)
+	if req.SaveAsYaml {
+		if err := s.service.SaveAgentAsYAML(updated); err != nil {
+			s.logger.Warn("Failed to save agent as YAML", "id", updated.ID, "error", err)
+		} else {
+			s.logger.Info("Agent saved as YAML for hot-reload", "id", updated.ID)
+		}
 	}
 
 	return agentToProto(updated), nil
@@ -345,6 +364,65 @@ func (s *Server) HealthCheck(ctx context.Context, _ *common.HealthCheckRequest) 
 		Version:       "1.0.0",
 		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
 		Details:       details,
+	}, nil
+}
+
+// FindBestAgent implements LeibnizServiceServer.FindBestAgent
+// Uses RAG-style vector similarity to find the best matching agent for a task
+func (s *Server) FindBestAgent(ctx context.Context, req *pb.FindAgentRequest) (*pb.AgentMatchResponse, error) {
+	if req.TaskDescription == "" {
+		return nil, status.Error(codes.InvalidArgument, "task_description is required")
+	}
+
+	match, err := s.service.FindBestAgentForTask(ctx, req.TaskDescription)
+	if err != nil {
+		s.logger.Warn("FindBestAgent failed", "error", err)
+		// Return default agent as fallback
+		return &pb.AgentMatchResponse{
+			AgentId:    "default",
+			AgentName:  "Default Agent",
+			Similarity: 0,
+		}, nil
+	}
+
+	return &pb.AgentMatchResponse{
+		AgentId:    match.AgentID,
+		AgentName:  match.AgentName,
+		Similarity: match.Similarity,
+	}, nil
+}
+
+// FindTopAgents implements LeibnizServiceServer.FindTopAgents
+// Returns the top N matching agents for a task based on vector similarity
+func (s *Server) FindTopAgents(ctx context.Context, req *pb.FindTopAgentsRequest) (*pb.AgentMatchListResponse, error) {
+	if req.TaskDescription == "" {
+		return nil, status.Error(codes.InvalidArgument, "task_description is required")
+	}
+
+	topN := int(req.TopN)
+	if topN <= 0 {
+		topN = 3 // Default to top 3
+	}
+
+	matches, err := s.service.FindTopAgentsForTask(ctx, req.TaskDescription, topN)
+	if err != nil {
+		s.logger.Warn("FindTopAgents failed", "error", err)
+		return &pb.AgentMatchListResponse{
+			Matches: []*pb.AgentMatchResponse{},
+		}, nil
+	}
+
+	pbMatches := make([]*pb.AgentMatchResponse, len(matches))
+	for i, m := range matches {
+		pbMatches[i] = &pb.AgentMatchResponse{
+			AgentId:    m.AgentID,
+			AgentName:  m.AgentName,
+			Similarity: m.Similarity,
+		}
+	}
+
+	return &pb.AgentMatchListResponse{
+		Matches: pbMatches,
 	}, nil
 }
 

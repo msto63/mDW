@@ -200,8 +200,15 @@ func (c *WebSearchClient) parseDuckDuckGoResults(html string, count int) []Searc
 
 	for i := 0; i < len(resultMatches) && len(results) < count; i++ {
 		if len(resultMatches[i]) >= 3 {
+			rawURL := resultMatches[i][1]
+			actualURL := c.extractDDGActualURL(rawURL)
+
+			if actualURL == "" {
+				continue
+			}
+
 			result := SearchResult{
-				URL:    resultMatches[i][1],
+				URL:    actualURL,
 				Title:  strings.TrimSpace(resultMatches[i][2]),
 				Source: "DuckDuckGo",
 			}
@@ -210,10 +217,7 @@ func (c *WebSearchClient) parseDuckDuckGoResults(html string, count int) []Searc
 				result.Description = strings.TrimSpace(snippetMatches[i][1])
 			}
 
-			// Skip tracking URLs
-			if result.URL != "" && !strings.Contains(result.URL, "duckduckgo.com") {
-				results = append(results, result)
-			}
+			results = append(results, result)
 		}
 	}
 
@@ -223,6 +227,30 @@ func (c *WebSearchClient) parseDuckDuckGoResults(html string, count int) []Searc
 	}
 
 	return results
+}
+
+// extractDDGActualURL extracts the actual URL from DuckDuckGo redirect URLs
+func (c *WebSearchClient) extractDDGActualURL(rawURL string) string {
+	// DuckDuckGo uses redirect URLs like //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com&...
+	if strings.Contains(rawURL, "uddg=") {
+		if parts := strings.Split(rawURL, "uddg="); len(parts) > 1 {
+			decoded, err := url.QueryUnescape(parts[1])
+			if err == nil {
+				// Remove any trailing parameters
+				actualURL := strings.Split(decoded, "&")[0]
+				if strings.HasPrefix(actualURL, "http") {
+					return actualURL
+				}
+			}
+		}
+	}
+
+	// Direct URL (not a redirect)
+	if strings.HasPrefix(rawURL, "http") {
+		return rawURL
+	}
+
+	return ""
 }
 
 // simpleDDGParsing is a fallback parser for DuckDuckGo
@@ -325,19 +353,42 @@ func extractTitle(html string) string {
 
 // extractTextFromHTML removes HTML tags and extracts readable text
 func extractTextFromHTML(html string) string {
-	// Remove script and style tags with content
-	scriptPattern := regexp.MustCompile(`(?i)<script[^>]*>[\s\S]*?</script>`)
+	// Remove script tags with content (greedy match)
+	scriptPattern := regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
 	html = scriptPattern.ReplaceAllString(html, "")
 
-	stylePattern := regexp.MustCompile(`(?i)<style[^>]*>[\s\S]*?</style>`)
+	// Remove style tags with content (greedy match)
+	stylePattern := regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
 	html = stylePattern.ReplaceAllString(html, "")
 
+	// Remove noscript tags
+	noscriptPattern := regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
+	html = noscriptPattern.ReplaceAllString(html, "")
+
+	// Remove head section entirely
+	headPattern := regexp.MustCompile(`(?is)<head[^>]*>.*?</head>`)
+	html = headPattern.ReplaceAllString(html, "")
+
+	// Remove SVG content
+	svgPattern := regexp.MustCompile(`(?is)<svg[^>]*>.*?</svg>`)
+	html = svgPattern.ReplaceAllString(html, "")
+
 	// Remove HTML comments
-	commentPattern := regexp.MustCompile(`<!--[\s\S]*?-->`)
+	commentPattern := regexp.MustCompile(`(?s)<!--.*?-->`)
 	html = commentPattern.ReplaceAllString(html, "")
 
+	// Remove inline CSS (style attributes)
+	inlineStylePattern := regexp.MustCompile(`(?i)\s*style\s*=\s*"[^"]*"`)
+	html = inlineStylePattern.ReplaceAllString(html, "")
+
+	// Remove navigation, header, footer, aside elements (often not main content)
+	navPattern := regexp.MustCompile(`(?is)<nav[^>]*>.*?</nav>`)
+	html = navPattern.ReplaceAllString(html, "")
+	footerPattern := regexp.MustCompile(`(?is)<footer[^>]*>.*?</footer>`)
+	html = footerPattern.ReplaceAllString(html, "")
+
 	// Replace block elements with newlines
-	blockPattern := regexp.MustCompile(`(?i)</(p|div|br|h[1-6]|li|tr)>`)
+	blockPattern := regexp.MustCompile(`(?i)</(p|div|br|h[1-6]|li|tr|article|section)>`)
 	html = blockPattern.ReplaceAllString(html, "\n")
 
 	// Remove all remaining HTML tags
@@ -351,6 +402,15 @@ func extractTextFromHTML(html string) string {
 	text = strings.ReplaceAll(text, "&gt;", ">")
 	text = strings.ReplaceAll(text, "&quot;", "\"")
 	text = strings.ReplaceAll(text, "&#39;", "'")
+	text = strings.ReplaceAll(text, "&apos;", "'")
+
+	// Remove CSS-like patterns that might have slipped through
+	cssPattern := regexp.MustCompile(`(?s)\{[^}]*\}`)
+	text = cssPattern.ReplaceAllString(text, "")
+
+	// Remove lines that look like CSS selectors or rules
+	cssLinePattern := regexp.MustCompile(`(?m)^[.\#@][a-zA-Z0-9_-]+.*$`)
+	text = cssLinePattern.ReplaceAllString(text, "")
 
 	// Clean up whitespace
 	whitespacePattern := regexp.MustCompile(`[ \t]+`)

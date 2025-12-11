@@ -181,6 +181,16 @@ func (w *LeibnizWrapper) Execute(ctx context.Context, req *leibnizpb.ExecuteRequ
 	return w.client.Execute(ctx, req)
 }
 
+// FindBestAgent calls Leibniz FindBestAgent for RAG-style agent selection
+func (w *LeibnizWrapper) FindBestAgent(ctx context.Context, req *leibnizpb.FindAgentRequest) (*leibnizpb.AgentMatchResponse, error) {
+	return w.client.FindBestAgent(ctx, req)
+}
+
+// FindTopAgents calls Leibniz FindTopAgents for RAG-style agent selection
+func (w *LeibnizWrapper) FindTopAgents(ctx context.Context, req *leibnizpb.FindTopAgentsRequest) (*leibnizpb.AgentMatchListResponse, error) {
+	return w.client.FindTopAgents(ctx, req)
+}
+
 // HypatiaWrapper wraps Hypatia client for router interface
 type HypatiaWrapper struct {
 	client hypatiapb.HypatiaServiceClient

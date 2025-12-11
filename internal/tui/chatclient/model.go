@@ -24,6 +24,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	aristotelepb "github.com/msto63/mDW/api/gen/aristoteles"
+	"github.com/msto63/mDW/api/gen/common"
+	leibnizpb "github.com/msto63/mDW/api/gen/leibniz"
 	turingpb "github.com/msto63/mDW/api/gen/turing"
 	"github.com/msto63/mDW/internal/turing/ollama"
 	"google.golang.org/grpc"
@@ -49,6 +51,7 @@ type Model struct {
 	turingOnline   bool
 	focus          FocusArea
 	showModelList  bool
+	showAgentList  bool // Agent-Auswahl-Overlay
 	err            error
 
 	// Components
@@ -85,12 +88,27 @@ type Model struct {
 	lastIntentType    string // Letzter erkannter Intent-Typ
 	lastStrategyName  string // Letzte verwendete Strategie
 	lastQualityScore  float32 // Letzter Quality-Score
+	currentStep       string // Aktueller Verarbeitungsschritt (für Anzeige)
+
+	// Agent Pipeline state (für UI-Anzeige)
+	lastAgentID       string  // Zuletzt verwendeter Agent
+	lastAgentName     string  // Name des letzten Agents
+	lastAgentConfidence float64 // Confidence des Agent-Matchings
+	pipelineAgents    []string // Liste der Agents in der Pipeline (für Multi-Agent)
+
+	// Agent selection state
+	availableAgents   []AgentInfo // Liste verfügbarer Agents
+	agentIndex        int         // Index des aktuell ausgewählten Agents in der Liste
+	selectedAgentID   string      // Manuell ausgewählter Agent-ID ("" = auto)
+	selectedAgentName string      // Name des manuell ausgewählten Agents
+	leibnizAddr       string      // Leibniz gRPC address für Agent-Abfragen
 }
 
 // Config holds ChatClient configuration
 type Config struct {
 	TuringAddr      string
 	AristotelesAddr string
+	LeibnizAddr     string // Leibniz address für Agent-Liste
 	Model           string
 	UseAristoteles  bool // Default: use Aristoteles pipeline
 }
@@ -100,6 +118,7 @@ func DefaultConfig() Config {
 	return Config{
 		TuringAddr:      "localhost:9200",
 		AristotelesAddr: "localhost:9160",
+		LeibnizAddr:     "localhost:9140",
 		Model:           "mistral:7b",
 		UseAristoteles:  false, // Default: direct Turing (toggle mit Ctrl+A)
 	}
@@ -149,6 +168,15 @@ func New(cfg Config) Model {
 	if aristotelesAddr == "" {
 		aristotelesAddr = DefaultConfig().AristotelesAddr
 	}
+	leibnizAddr := cfg.LeibnizAddr
+	if leibnizAddr == "" {
+		leibnizAddr = DefaultConfig().LeibnizAddr
+	}
+
+	// Default agents list with "auto" option
+	defaultAgents := []AgentInfo{
+		{ID: "", Name: "Auto", Description: "Automatische Agent-Auswahl basierend auf Anfrage"},
+	}
 
 	return Model{
 		textarea:          ta,
@@ -161,10 +189,14 @@ func New(cfg Config) Model {
 		historyIndex:      -1, // -1 bedeutet: keine Historie-Navigation aktiv
 		turingAddr:        turingAddr,
 		aristotelesAddr:   aristotelesAddr,
+		leibnizAddr:       leibnizAddr,
 		ollamaClient:      ollama.NewClient(ollama.DefaultConfig()),
 		useGRPC:           true,
 		useAristoteles:    cfg.UseAristoteles,
 		focus:             FocusChat,
+		availableAgents:   defaultAgents,
+		selectedAgentID:   "", // "" = auto
+		selectedAgentName: "Auto",
 	}
 }
 
@@ -176,6 +208,7 @@ func (m Model) Init() tea.Cmd {
 		m.checkTuringStatus,
 		m.checkAristotelesStatus,
 		m.loadModels,
+		m.loadAgents,
 		tea.EnterAltScreen,
 	)
 }
@@ -216,6 +249,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatResponseMsg:
 		m.loading = false
+		m.currentStep = "" // Reset step display
 		if msg.err != nil {
 			m.err = msg.err
 			m.messages = append(m.messages, ChatMessage{
@@ -298,6 +332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case aristotelesPipelineMsg:
 		m.loading = false
+		m.currentStep = "" // Reset step display
 		if msg.err != nil {
 			m.err = msg.err
 			m.messages = append(m.messages, ChatMessage{
@@ -311,18 +346,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastStrategyName = msg.strategyName
 			m.lastQualityScore = msg.qualityScore
 
+			// Agent Pipeline Info speichern
+			m.lastAgentID = msg.agentID
+			m.lastAgentName = msg.agentName
+			m.lastAgentConfidence = msg.agentConfidence
+
+			// Model-Info mit Agent-Details formatieren
+			modelInfo := m.currentModel
+			if msg.agentName != "" {
+				// Agent wurde verwendet - zeige Agent-Info
+				modelInfo = fmt.Sprintf("%s [Agent: %s, %.0f%%]", msg.targetService, msg.agentName, msg.agentConfidence*100)
+			} else {
+				// Direkter Service-Aufruf
+				modelInfo = fmt.Sprintf("%s [%s, Q:%.0f%%]", m.currentModel, msg.strategyName, msg.qualityScore*100)
+			}
+
 			// Antwort mit Pipeline-Info anzeigen
-			content := msg.content
 			m.messages = append(m.messages, ChatMessage{
 				Role:      "assistant",
-				Content:   content,
-				Model:     fmt.Sprintf("%s [%s, Q:%.0f%%]", m.currentModel, msg.strategyName, msg.qualityScore*100),
+				Content:   msg.content,
+				Model:     modelInfo,
 				Timestamp: time.Now(),
 				Duration:  msg.duration,
 			})
 		}
 		m.updateViewportContent()
 		m.viewport.GotoBottom()
+
+	case stepUpdateMsg:
+		m.currentStep = msg.step
+
+	case agentListMsg:
+		if msg.err != nil {
+			// Bei Fehler behalten wir die Default-Liste
+		} else {
+			// Auto-Option beibehalten + geladene Agents
+			m.availableAgents = []AgentInfo{
+				{ID: "", Name: "Auto", Description: "Automatische Agent-Auswahl basierend auf Anfrage"},
+			}
+			m.availableAgents = append(m.availableAgents, msg.agents...)
+		}
 
 	case tickMsg:
 		// Periodic status check
@@ -336,7 +399,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update components
-	if m.focus == FocusChat && !m.showModelList {
+	if m.focus == FocusChat && !m.showModelList && !m.showAgentList {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -408,6 +471,65 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Agent selector navigation - handle when agent list is shown
+	if m.showAgentList {
+		switch msg.Type {
+		case tea.KeyUp:
+			if m.agentIndex > 0 {
+				m.agentIndex--
+			}
+			return m, nil
+
+		case tea.KeyDown:
+			if m.agentIndex < len(m.availableAgents)-1 {
+				m.agentIndex++
+			}
+			return m, nil
+
+		case tea.KeyEnter:
+			if m.agentIndex < len(m.availableAgents) {
+				m.selectedAgentID = m.availableAgents[m.agentIndex].ID
+				m.selectedAgentName = m.availableAgents[m.agentIndex].Name
+			}
+			m.showAgentList = false
+			m.focus = FocusChat
+			m.textarea.Focus()
+			return m, nil
+
+		case tea.KeyEsc:
+			m.showAgentList = false
+			m.focus = FocusChat
+			m.textarea.Focus()
+			return m, nil
+
+		case tea.KeyRunes:
+			// Handle j/k for vim-style navigation
+			switch string(msg.Runes) {
+			case "k":
+				if m.agentIndex > 0 {
+					m.agentIndex--
+				}
+				return m, nil
+			case "j":
+				if m.agentIndex < len(m.availableAgents)-1 {
+					m.agentIndex++
+				}
+				return m, nil
+			case " ":
+				if m.agentIndex < len(m.availableAgents) {
+					m.selectedAgentID = m.availableAgents[m.agentIndex].ID
+					m.selectedAgentName = m.availableAgents[m.agentIndex].Name
+				}
+				m.showAgentList = false
+				m.focus = FocusChat
+				m.textarea.Focus()
+				return m, nil
+			}
+		}
+		// Ignore all other keys when agent list is open
+		return m, nil
+	}
+
 	// Global shortcuts
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -431,6 +553,30 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.modelIndex = i
 				break
 			}
+		}
+		return m, nil
+	}
+
+	// Check for Ctrl+G (Agent selector) - nur im Aristoteles-Modus
+	if msg.String() == "ctrl+g" {
+		if m.useAristoteles && m.aristotelesOnline {
+			m.showAgentList = true
+			m.textarea.Blur()
+			// Set agentIndex to current agent
+			for i, agent := range m.availableAgents {
+				if agent.ID == m.selectedAgentID {
+					m.agentIndex = i
+					break
+				}
+			}
+		} else {
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   "Agent-Auswahl nur im Aristoteles-Modus verfügbar (Ctrl+A zum Aktivieren)",
+				Timestamp: time.Now(),
+			})
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
 		}
 		return m, nil
 	}
@@ -497,9 +643,15 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Entscheide zwischen Aristoteles-Pipeline und direktem Streaming
 				if m.useAristoteles && m.aristotelesOnline {
 					m.loading = true
+					m.currentStep = StepAnalyzing
+					// Reset Agent-Info bis neue Antwort kommt
+					m.lastAgentID = ""
+					m.lastAgentName = ""
+					m.lastAgentConfidence = 0
 					return m, tea.Batch(
 						m.spinner.Tick,
 						m.sendMessageViaAristoteles(input),
+						m.scheduleStepUpdates(),
 					)
 				}
 				// Standard: Direktes Streaming via Turing/Ollama
@@ -575,6 +727,10 @@ func (m Model) View() string {
 	// If model list is shown, show dropdown instead of chat area
 	if m.showModelList {
 		b.WriteString(m.renderModelDropdown())
+		b.WriteString("\n")
+	} else if m.showAgentList {
+		// Agent selection dropdown
+		b.WriteString(m.renderAgentDropdown())
 		b.WriteString("\n")
 	} else {
 		// Chat viewport
@@ -677,6 +833,72 @@ func (m Model) renderModelDropdown() string {
 		Render(content.String())
 }
 
+// renderAgentDropdown renders the agent selection dropdown as a full panel
+func (m Model) renderAgentDropdown() string {
+	var content strings.Builder
+
+	// Title
+	content.WriteString(HeaderStyle.Render("  Agent auswählen"))
+	content.WriteString("\n\n")
+
+	// Agent list
+	for i, agent := range m.availableAgents {
+		var line string
+		isSelected := i == m.agentIndex
+		isCurrent := agent.ID == m.selectedAgentID
+
+		if isSelected {
+			// Selected item with cursor and highlighting
+			line = SelectedModelItemStyle.Render(fmt.Sprintf(" ▶ %s ", agent.Name))
+			if agent.Description != "" {
+				// Truncate long descriptions
+				desc := agent.Description
+				if len(desc) > 50 {
+					desc = desc[:47] + "..."
+				}
+				line += HelpDescStyle.Render(" - " + desc)
+			}
+			if isCurrent {
+				line += StatusOnlineStyle.Render(" ✓")
+			}
+		} else {
+			// Normal item
+			line = ModelItemStyle.Render(fmt.Sprintf("   %s ", agent.Name))
+			if agent.Description != "" {
+				desc := agent.Description
+				if len(desc) > 50 {
+					desc = desc[:47] + "..."
+				}
+				line += HelpDescStyle.Render(" - " + desc)
+			}
+			if isCurrent {
+				line += StatusOnlineStyle.Render(" ✓")
+			}
+		}
+		content.WriteString(line)
+		content.WriteString("\n")
+	}
+
+	// Footer with count and hints
+	content.WriteString("\n")
+	if m.selectedAgentID == "" {
+		content.WriteString(HelpDescStyle.Render(fmt.Sprintf("  Aktuell: Auto (automatische Auswahl)")))
+	} else {
+		content.WriteString(HelpDescStyle.Render(fmt.Sprintf("  Aktuell: %s", m.selectedAgentName)))
+	}
+	content.WriteString("\n")
+	content.WriteString(HelpDescStyle.Render(fmt.Sprintf("  [%d von %d Agents]", m.agentIndex+1, len(m.availableAgents))))
+	content.WriteString("\n\n")
+	content.WriteString(HelpStyle.Render("  ↑/↓ navigieren • Enter auswählen • Esc schließen"))
+
+	// Render in a prominent panel
+	panelHeight := m.viewport.Height + 2
+	return FocusedModelSelectorStyle.
+		Width(m.width - 2).
+		Height(panelHeight).
+		Render(content.String())
+}
+
 // renderChatArea renders the main chat viewport
 func (m Model) renderChatArea() string {
 	style := ChatPanelStyle.Width(m.width - 2).Height(m.viewport.Height + 2)
@@ -691,7 +913,11 @@ func (m Model) renderInputArea() string {
 	var input string
 
 	if m.loading {
-		input = m.spinner.View() + ThinkingStyle.Render(" Generiere Antwort...")
+		statusText := " Generiere Antwort..."
+		if m.currentStep != "" {
+			statusText = fmt.Sprintf(" %s...", m.currentStep)
+		}
+		input = m.spinner.View() + ThinkingStyle.Render(statusText)
 	} else if m.streaming {
 		input = m.spinner.View() + ThinkingStyle.Render(" Empfange Antwort...")
 	} else {
@@ -714,10 +940,18 @@ func (m Model) renderStatusBar() string {
 		modelInfo += HelpDescStyle.Render(" [Pipeline]")
 	}
 
-	// Center: Version info + Pipeline status
+	// Center: Version info + Pipeline status + Agent info
 	var centerInfo string
-	if m.useAristoteles && m.lastStrategyName != "" {
-		centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | %s Q:%.0f%%", Version, m.lastStrategyName, m.lastQualityScore*100))
+	if m.useAristoteles {
+		if m.lastAgentName != "" {
+			// Agent wurde verwendet - zeige Agent-Info
+			centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | Agent: %s (%.0f%%)", Version, m.lastAgentName, m.lastAgentConfidence*100))
+		} else if m.lastStrategyName != "" {
+			// Keine Agent-Info, aber Strategie vorhanden
+			centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | %s Q:%.0f%%", Version, m.lastStrategyName, m.lastQualityScore*100))
+		} else {
+			centerInfo = HelpDescStyle.Render("v" + Version)
+		}
 	} else {
 		centerInfo = HelpDescStyle.Render("v" + Version)
 	}
@@ -764,6 +998,12 @@ func (m Model) renderHelpBar() string {
 			RenderKeyHint("Enter", "auswählen"),
 			RenderKeyHint("Esc", "schließen"),
 		}
+	} else if m.showAgentList {
+		items = []string{
+			RenderKeyHint("↑/↓", "navigieren"),
+			RenderKeyHint("Enter", "auswählen"),
+			RenderKeyHint("Esc", "schließen"),
+		}
 	} else {
 		// Aristoteles-Status im Hint anzeigen
 		var aristotelesHint string
@@ -777,9 +1017,13 @@ func (m Model) renderHelpBar() string {
 			RenderKeyHint("↑/↓", "Historie"),
 			RenderKeyHint("Ctrl+O", "Modell"),
 			RenderKeyHint("Ctrl+A", aristotelesHint),
-			RenderKeyHint("Ctrl+L", "leeren"),
-			RenderKeyHint("Ctrl+C", "beenden"),
 		}
+		// Zeige Ctrl+G nur im Pipeline-Modus
+		if m.useAristoteles {
+			items = append(items, RenderKeyHint("Ctrl+G", "Agent"))
+		}
+		items = append(items, RenderKeyHint("Ctrl+L", "leeren"))
+		items = append(items, RenderKeyHint("Ctrl+C", "beenden"))
 	}
 
 	return HelpStyle.Render(strings.Join(items, "  "))
@@ -1013,6 +1257,45 @@ func (m Model) loadModels() tea.Msg {
 	return modelsLoadedMsg{models: modelInfos}
 }
 
+// loadAgents loads available agents from Leibniz service
+func (m Model) loadAgents() tea.Msg {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Connect to Leibniz
+	conn, err := grpc.DialContext(ctx, m.leibnizAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return agentListMsg{err: err}
+	}
+	defer conn.Close()
+
+	client := leibnizpb.NewLeibnizServiceClient(conn)
+
+	// List agents
+	resp, err := client.ListAgents(ctx, &common.Empty{})
+	if err != nil {
+		return agentListMsg{err: err}
+	}
+
+	var agents []AgentInfo
+	for _, agent := range resp.Agents {
+		var tools []string
+		for _, t := range agent.Tools {
+			tools = append(tools, t)
+		}
+		agents = append(agents, AgentInfo{
+			ID:          agent.Id,
+			Name:        agent.Name,
+			Description: agent.Description,
+			Tools:       tools,
+		})
+	}
+
+	return agentListMsg{agents: agents}
+}
+
 // checkAristotelesStatus checks if Aristoteles service is available
 func (m Model) checkAristotelesStatus() tea.Msg {
 	conn, err := m.dialAristotelesGRPC()
@@ -1056,6 +1339,7 @@ func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
 			Prompt:    input,
 			Options: &aristotelepb.ProcessOptions{
 				ForceModel: m.currentModel,
+				ForceAgent: m.selectedAgentID, // "" = auto-selection, sonst explizite Agent-ID
 			},
 		}
 
@@ -1085,15 +1369,62 @@ func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
 			qualityScore = resp.Metrics.QualityScore
 		}
 
+		// Extract agent pipeline info
+		agentID := ""
+		agentName := ""
+		agentConfidence := 0.0
+		targetService := "Turing"
+
+		if resp.Route != nil {
+			targetService = resp.Route.Service.String()
+			agentID = resp.Route.AgentId
+		}
+
+		// Extract agent match info from metadata (set by router)
+		if resp.Metadata != nil {
+			if name, ok := resp.Metadata["matched_agent_name"]; ok {
+				agentName = name
+			}
+			if conf, ok := resp.Metadata["agent_confidence"]; ok {
+				// Parse confidence string to float
+				if _, err := fmt.Sscanf(conf, "%f", &agentConfidence); err != nil {
+					agentConfidence = 0.0
+				}
+			}
+		}
+
 		return aristotelesPipelineMsg{
-			content:      resp.Response,
-			intentType:   intentType,
-			strategyName: strategyName,
-			qualityScore: qualityScore,
-			duration:     time.Since(startTime),
-			enrichments:  enrichments,
+			content:         resp.Response,
+			intentType:      intentType,
+			strategyName:    strategyName,
+			qualityScore:    qualityScore,
+			duration:        time.Since(startTime),
+			enrichments:     enrichments,
+			agentID:         agentID,
+			agentName:       agentName,
+			agentConfidence: agentConfidence,
+			targetService:   targetService,
 		}
 	}
+}
+
+// scheduleStepUpdates returns a command that schedules step updates
+// This simulates the pipeline steps since actual server steps aren't streamed
+func (m Model) scheduleStepUpdates() tea.Cmd {
+	return tea.Batch(
+		tea.Tick(1500*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepSearching}
+		}),
+		tea.Tick(3500*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepFetching}
+		}),
+		tea.Tick(6000*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepProcessing}
+		}),
+		tea.Tick(9000*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepGenerating}
+		}),
+	)
 }
 
 // Run starts the ChatClient TUI

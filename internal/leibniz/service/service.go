@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/msto63/mDW/internal/leibniz/agent"
+	"github.com/msto63/mDW/internal/leibniz/agentloader"
 	"github.com/msto63/mDW/internal/leibniz/mcp"
 	"github.com/msto63/mDW/internal/leibniz/platon"
 	"github.com/msto63/mDW/internal/leibniz/store"
@@ -103,6 +104,9 @@ type Service struct {
 	llmFunc          agent.LLMFunc
 	store            store.AgentStore
 
+	// YAML-based agent loader with hot-reload
+	agentLoader *agentloader.Loader
+
 	// In-memory storage (fallback when store is nil)
 	mu           sync.RWMutex
 	agents       map[string]*AgentDefinition
@@ -134,6 +138,10 @@ type Config struct {
 	PlatonHost    string        // Platon service host
 	PlatonPort    int           // Platon service port
 	PlatonTimeout time.Duration // Timeout for Platon calls
+
+	// YAML-based agent configuration
+	AgentsDir       string // Directory for YAML agent definitions
+	EnableHotReload bool   // Enable hot-reload of agent definitions
 }
 
 // MCPServerConfig holds MCP server configuration
@@ -163,6 +171,8 @@ func DefaultConfig() Config {
 		PlatonHost:             "localhost",
 		PlatonPort:             9130,
 		PlatonTimeout:          30 * time.Second,
+		AgentsDir:              "./configs/agents", // YAML agent definitions
+		EnableHotReload:        true,               // Hot-reload enabled by default
 	}
 }
 
@@ -199,6 +209,38 @@ func NewService(cfg Config) (*Service, error) {
 		// Load agents from store
 		if err := svc.loadAgentsFromStore(); err != nil {
 			logger.Warn("Failed to load agents from store", "error", err)
+		}
+	}
+
+	// Initialize YAML-based agent loader
+	if cfg.AgentsDir != "" {
+		svc.agentLoader = agentloader.NewLoader(cfg.AgentsDir)
+
+		// Set callbacks for hot-reload
+		svc.agentLoader.SetOnChange(func(agentID string, yamlAgent *agentloader.AgentYAML) {
+			svc.onAgentReloaded(agentID, yamlAgent)
+		})
+		svc.agentLoader.SetOnDelete(func(agentID string) {
+			svc.onAgentDeleted(agentID)
+		})
+
+		// Load all YAML agents
+		if err := svc.agentLoader.LoadAll(); err != nil {
+			logger.Warn("Failed to load YAML agents", "error", err)
+		} else {
+			// Register loaded agents
+			for _, yamlAgent := range svc.agentLoader.GetAll() {
+				svc.registerYAMLAgent(yamlAgent)
+			}
+		}
+
+		// Start hot-reload watcher if enabled
+		if cfg.EnableHotReload {
+			if err := svc.agentLoader.StartWatching(context.Background()); err != nil {
+				logger.Warn("Failed to start agent hot-reload watcher", "error", err)
+			} else {
+				logger.Info("Agent hot-reload enabled", "dir", cfg.AgentsDir)
+			}
 		}
 	}
 
@@ -615,6 +657,11 @@ func (s *Service) Agent() *agent.Agent {
 
 // Close closes the service and all MCP connections
 func (s *Service) Close() error {
+	// Stop agent hot-reload watcher
+	if s.agentLoader != nil {
+		s.agentLoader.Stop()
+	}
+
 	for name := range s.mcpClients {
 		s.DisconnectMCPServer(name)
 	}
@@ -1061,4 +1108,205 @@ func getString(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// YAML Agent Management Methods
+
+// registerYAMLAgent converts a YAML agent definition and registers it
+func (s *Service) registerYAMLAgent(yamlAgent *agentloader.AgentYAML) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	agentDef := &AgentDefinition{
+		ID:           yamlAgent.ID,
+		Name:         yamlAgent.Name,
+		Description:  yamlAgent.Description,
+		SystemPrompt: yamlAgent.SystemPrompt,
+		Tools:        yamlAgent.GetToolNames(),
+		Model:        yamlAgent.Model,
+		MaxSteps:     yamlAgent.MaxSteps,
+		Timeout:      yamlAgent.Timeout,
+		CreatedAt:    yamlAgent.LoadedAt,
+		UpdatedAt:    yamlAgent.LoadedAt,
+	}
+
+	s.agents[yamlAgent.ID] = agentDef
+	s.logger.Info("YAML agent registered",
+		"id", yamlAgent.ID,
+		"name", yamlAgent.Name,
+		"model", yamlAgent.Model,
+		"tools", len(yamlAgent.Tools),
+	)
+}
+
+// onAgentReloaded is called when a YAML agent is created or updated
+func (s *Service) onAgentReloaded(agentID string, yamlAgent *agentloader.AgentYAML) {
+	s.registerYAMLAgent(yamlAgent)
+	s.logger.Info("Agent hot-reloaded", "id", agentID, "name", yamlAgent.Name)
+}
+
+// onAgentDeleted is called when a YAML agent file is deleted
+func (s *Service) onAgentDeleted(agentID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.agents[agentID]; exists {
+		delete(s.agents, agentID)
+		s.logger.Info("YAML agent removed", "id", agentID)
+	}
+}
+
+// GetAgentLoader returns the YAML agent loader (for external access)
+func (s *Service) GetAgentLoader() *agentloader.Loader {
+	return s.agentLoader
+}
+
+// SetEmbeddingFunc sets the embedding function for agent matching
+// This enables RAG-style agent selection based on task similarity
+func (s *Service) SetEmbeddingFunc(fn agentloader.EmbeddingFunc) {
+	if s.agentLoader == nil {
+		s.logger.Warn("Cannot set embedding function: agent loader not initialized")
+		return
+	}
+
+	s.agentLoader.SetEmbeddingFunc(fn)
+	s.logger.Info("Embedding function configured for agent matching")
+
+	// Update embeddings for all loaded agents
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := s.agentLoader.UpdateAllEmbeddings(ctx); err != nil {
+			s.logger.Warn("Failed to update initial agent embeddings", "error", err)
+		}
+	}()
+}
+
+// FindBestAgentForTask finds the best matching agent for a task description
+// using vector similarity (RAG-style matching)
+func (s *Service) FindBestAgentForTask(ctx context.Context, taskDescription string) (*AgentMatch, error) {
+	if s.agentLoader == nil {
+		return nil, fmt.Errorf("agent loader not initialized")
+	}
+
+	match, err := s.agentLoader.FindBestAgentForTask(ctx, taskDescription)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AgentMatch{
+		AgentID:    match.AgentID,
+		AgentName:  match.AgentName,
+		Similarity: match.Similarity,
+	}, nil
+}
+
+// FindTopAgentsForTask finds the top N matching agents for a task
+func (s *Service) FindTopAgentsForTask(ctx context.Context, taskDescription string, topN int) ([]*AgentMatch, error) {
+	if s.agentLoader == nil {
+		return nil, fmt.Errorf("agent loader not initialized")
+	}
+
+	matches, err := s.agentLoader.FindTopAgentsForTask(ctx, taskDescription, topN)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*AgentMatch, len(matches))
+	for i, m := range matches {
+		result[i] = &AgentMatch{
+			AgentID:    m.AgentID,
+			AgentName:  m.AgentName,
+			Similarity: m.Similarity,
+		}
+	}
+
+	return result, nil
+}
+
+// GetAgentInfoList returns a list of all agents with their info
+func (s *Service) GetAgentInfoList() []*AgentInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	infos := make([]*AgentInfo, 0, len(s.agents))
+	for _, agent := range s.agents {
+		infos = append(infos, &AgentInfo{
+			ID:          agent.ID,
+			Name:        agent.Name,
+			Description: agent.Description,
+		})
+	}
+	return infos
+}
+
+// AgentMatch represents an agent matching result
+type AgentMatch struct {
+	AgentID    string
+	AgentName  string
+	Similarity float64
+}
+
+// AgentInfo represents basic agent information
+type AgentInfo struct {
+	ID          string
+	Name        string
+	Description string
+}
+
+// SaveAgentAsYAML saves an agent definition to a YAML file
+func (s *Service) SaveAgentAsYAML(agentDef *AgentDefinition) error {
+	if s.agentLoader == nil {
+		return fmt.Errorf("YAML agent loader not initialized")
+	}
+
+	// Convert to YAML format
+	yamlAgent := &agentloader.AgentYAML{
+		ID:           agentDef.ID,
+		Name:         agentDef.Name,
+		Description:  agentDef.Description,
+		Model:        agentDef.Model,
+		MaxSteps:     agentDef.MaxSteps,
+		Timeout:      agentDef.Timeout,
+		SystemPrompt: agentDef.SystemPrompt,
+	}
+
+	// Convert tool names to tool configs
+	for _, toolName := range agentDef.Tools {
+		yamlAgent.Tools = append(yamlAgent.Tools, agentloader.ToolConfig{
+			Name:    toolName,
+			Enabled: true,
+		})
+	}
+
+	return s.agentLoader.SaveAgent(yamlAgent)
+}
+
+// ReloadAgents reloads all YAML agents from disk
+func (s *Service) ReloadAgents() error {
+	if s.agentLoader == nil {
+		return fmt.Errorf("YAML agent loader not initialized")
+	}
+
+	// Clear YAML-based agents (keep DB-based ones)
+	s.mu.Lock()
+	for id := range s.agents {
+		if _, isYAML := s.agentLoader.Get(id); isYAML {
+			delete(s.agents, id)
+		}
+	}
+	s.mu.Unlock()
+
+	// Reload from YAML
+	if err := s.agentLoader.LoadAll(); err != nil {
+		return err
+	}
+
+	// Re-register all YAML agents
+	for _, yamlAgent := range s.agentLoader.GetAll() {
+		s.registerYAMLAgent(yamlAgent)
+	}
+
+	s.logger.Info("Agents reloaded", "count", len(s.agentLoader.GetAll()))
+	return nil
 }

@@ -282,11 +282,13 @@ func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
 		if stepResult.ToolCall != nil {
 			tool, exists := a.tools[stepResult.ToolCall.Name]
 			if !exists {
+				a.logger.Warn("Tool not found", "tool", stepResult.ToolCall.Name)
 				stepResult.ToolResult = &ToolResult{
 					Tool:  stepResult.ToolCall.Name,
 					Error: fmt.Sprintf("Tool not found: %s", stepResult.ToolCall.Name),
 				}
 			} else {
+				a.logger.Info("Executing tool", "tool", tool.Name, "params", stepResult.ToolCall.Params)
 				result, err := tool.Handler(ctx, stepResult.ToolCall.Params)
 				stepResult.ToolResult = &ToolResult{
 					Tool:   stepResult.ToolCall.Name,
@@ -294,6 +296,14 @@ func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
 				}
 				if err != nil {
 					stepResult.ToolResult.Error = err.Error()
+					a.logger.Error("Tool execution failed", "tool", tool.Name, "error", err)
+				} else {
+					// Log result summary (truncated for readability)
+					resultStr := fmt.Sprintf("%v", result)
+					if len(resultStr) > 200 {
+						resultStr = resultStr[:200] + "..."
+					}
+					a.logger.Info("Tool execution succeeded", "tool", tool.Name, "result_length", len(fmt.Sprintf("%v", result)))
 				}
 
 				// Track tool usage
@@ -313,22 +323,30 @@ func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
 			observation := formatObservation(stepResult.ToolResult)
 			messages = append(messages, Message{Role: "assistant", Content: response})
 
-			// Count how many search tool calls we've done
-			searchCount := 0
+			// Count fetch_webpage calls to guide the agent workflow
+			fetchCount := 0
 			for _, s := range execution.Steps {
-				if s.ToolCall != nil && (s.ToolCall.Name == "web_search" || s.ToolCall.Name == "search_news") {
-					searchCount++
+				if s.ToolCall != nil && s.ToolCall.Name == "fetch_webpage" {
+					fetchCount++
 				}
 			}
-			// Include current call if it's a search
-			if stepResult.ToolCall.Name == "web_search" || stepResult.ToolCall.Name == "search_news" {
-				searchCount++
+			// Include current call
+			if stepResult.ToolCall.Name == "fetch_webpage" {
+				fetchCount++
 			}
 
-			// Add urgency hint after first search to encourage FINAL_ANSWER
+			// Add context-aware hints based on workflow progress
 			observationMsg := fmt.Sprintf("OBSERVATION: %s", observation)
-			if searchCount >= 1 && (stepResult.ToolCall.Name == "web_search" || stepResult.ToolCall.Name == "search_news") {
-				observationMsg += "\n\nHINWEIS: Du hast bereits Suchergebnisse erhalten. Fasse diese jetzt mit FINAL_ANSWER zusammen! Führe KEINE weitere Suche durch."
+			if stepResult.ToolCall.Name == "web_search" || stepResult.ToolCall.Name == "search_news" {
+				if fetchCount == 0 {
+					observationMsg += "\n\nHINWEIS: Du hast Suchergebnisse erhalten. Rufe jetzt mit fetch_webpage die Inhalte von 2-3 relevanten URLs ab!"
+				}
+			} else if stepResult.ToolCall.Name == "fetch_webpage" {
+				if fetchCount >= 2 {
+					observationMsg += "\n\nHINWEIS: Du hast genug Inhalte gesammelt. Fasse diese jetzt mit FINAL_ANSWER als Fließtext zusammen!"
+				} else {
+					observationMsg += "\n\nHINWEIS: Rufe noch weitere Webseiten mit fetch_webpage ab, um mehr Informationen zu sammeln."
+				}
 			}
 			messages = append(messages, Message{Role: "user", Content: observationMsg})
 		}
@@ -394,12 +412,43 @@ func (a *Agent) parseResponse(response string) Step {
 	if idx := strings.Index(response, "ACTION_INPUT:"); idx != -1 {
 		inputStr := strings.TrimSpace(response[idx+13:])
 
+		// If there's another ACTION: after this, truncate
+		if nextAction := strings.Index(inputStr, "\nACTION:"); nextAction != -1 {
+			inputStr = strings.TrimSpace(inputStr[:nextAction])
+		}
+		if nextThought := strings.Index(inputStr, "\nTHOUGHT:"); nextThought != -1 {
+			inputStr = strings.TrimSpace(inputStr[:nextThought])
+		}
+		if nextSchritt := strings.Index(inputStr, "\nSCHRITT"); nextSchritt != -1 {
+			inputStr = strings.TrimSpace(inputStr[:nextSchritt])
+		}
+
 		step.ToolCall = &ToolCall{
 			Name:   step.Action,
 			Params: make(map[string]interface{}),
 		}
 
-		// Try to parse as JSON
+		// Try to parse as JSON - extract just the first JSON object if present
+		if strings.HasPrefix(inputStr, "{") {
+			// Find the matching closing brace
+			braceCount := 0
+			endIdx := -1
+			for i, c := range inputStr {
+				if c == '{' {
+					braceCount++
+				} else if c == '}' {
+					braceCount--
+					if braceCount == 0 {
+						endIdx = i + 1
+						break
+					}
+				}
+			}
+			if endIdx > 0 {
+				inputStr = inputStr[:endIdx]
+			}
+		}
+
 		var params map[string]interface{}
 		if err := json.Unmarshal([]byte(inputStr), &params); err == nil {
 			step.ToolCall.Params = params

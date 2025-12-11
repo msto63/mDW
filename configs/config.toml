@@ -95,6 +95,8 @@ host = "0.0.0.0"
 max_iterations = 10
 default_timeout = "60s"
 enable_streaming = true
+agents_dir = "./configs/agents"
+enable_hot_reload = true
 
 [leibniz.tools]
 web_search = true

@@ -43,6 +43,9 @@ type Config struct {
 	// Web Research Agent
 	EnableWebResearchAgent bool
 	SearXNGInstances       []string
+	// YAML-based agent configuration
+	AgentsDir       string // Directory for YAML agent definitions
+	EnableHotReload bool   // Enable hot-reload of agent definitions
 }
 
 // MCPServerConfig holds MCP server configuration
@@ -65,8 +68,10 @@ func DefaultConfig() Config {
 		PlatonPort:             9130,
 		EnablePlaton:           true,
 		PlatonTimeout:          30 * time.Second,
-		EnableWebResearchAgent: true, // Enable web-researcher agent by default
+		EnableWebResearchAgent: true,              // Enable web-researcher agent by default
 		SearXNGInstances:       []string{},
+		AgentsDir:              "./configs/agents", // YAML agent definitions
+		EnableHotReload:        true,               // Enable hot-reload by default
 	}
 }
 
@@ -95,6 +100,8 @@ func New(cfg Config) (*Server, error) {
 		PlatonTimeout:          cfg.PlatonTimeout,
 		EnableWebResearchAgent: cfg.EnableWebResearchAgent,
 		SearXNGInstances:       cfg.SearXNGInstances,
+		AgentsDir:              cfg.AgentsDir,
+		EnableHotReload:        cfg.EnableHotReload,
 	}
 
 	svc, err := service.NewService(svcCfg)

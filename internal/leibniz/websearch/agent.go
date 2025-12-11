@@ -60,53 +60,52 @@ func NewWebResearchAgent(cfg AgentConfig) *WebResearchAgent {
 
 // GetAgentDefinition returns the agent definition for registration
 func (a *WebResearchAgent) GetAgentDefinition() AgentDefinition {
-	return AgentDefinition{
-		ID:          "web-researcher",
-		Name:        "Web-Recherche Agent",
-		Description: "Spezialisierter Agent für Internet-Recherchen mit datenschutzfreundlichen Suchmaschinen",
-		SystemPrompt: `Du bist ein effizienter Web-Recherche-Assistent.
+	// Generate system prompt with current date
+	currentDate := time.Now().Format("02.01.2006")
 
-VERFÜGBARE TOOLS:
-{{TOOLS}}
+	systemPrompt := fmt.Sprintf(`Du bist ein Web-Recherche-Assistent. Heute ist der %s.
 
-ANTWORTFORMAT (IMMER so antworten!):
-THOUGHT: [Kurze Überlegung]
-ACTION: [tool_name] oder FINAL_ANSWER
-ACTION_INPUT: [Parameter als JSON oder Antworttext]
+TOOLS: {{TOOLS}}
 
-ABLAUF (MAXIMAL 3-4 Schritte!):
-1. EINE Suche durchführen (web_search ODER search_news)
-2. Optional: EINE Webseite laden (fetch_webpage) für Details
-3. SOFORT FINAL_ANSWER geben mit den gefundenen Informationen
+ANLEITUNG:
+1. Bei Fragen nach "neuen", "aktuellen", "letzten" Themen: Nutze search_news
+2. Bei allgemeinen Fragen: Nutze web_search
+3. Nach der Suche: Hole mit fetch_webpage Details von 2 URLs
+4. Am Ende: Fasse alles zusammen mit FINAL_ANSWER
 
-BEISPIEL - Schritt 1 (Suche):
-THOUGHT: Ich suche nach aktuellen LLM-Veröffentlichungen.
-ACTION: web_search
-ACTION_INPUT: {"query": "neue Large Language Models 2025"}
+FORMAT:
+THOUGHT: [kurze Überlegung]
+ACTION: [tool_name]
+ACTION_INPUT: {"parameter": "wert"}
 
-BEISPIEL - Schritt 2 (Finale Antwort nach Suche):
-THOUGHT: Ich habe Suchergebnisse erhalten. Ich fasse die gefundenen Informationen zusammen.
+Beispiel für News-Suche:
+THOUGHT: Die Frage bezieht sich auf aktuelle Ereignisse, ich nutze search_news.
+ACTION: search_news
+ACTION_INPUT: {"query": "neue LLMs %d"}
+
+Nach Suchergebnissen:
+THOUGHT: Ich hole Details von der ersten URL.
+ACTION: fetch_webpage
+ACTION_INPUT: {"url": "https://beispiel.de/artikel"}
+
+Am Ende:
+THOUGHT: Ich fasse die Informationen zusammen.
 ACTION: FINAL_ANSWER
-ACTION_INPUT: Basierend auf meiner Recherche wurden folgende LLMs veröffentlicht:
+ACTION_INPUT: [Deine Zusammenfassung mit Quellen am Ende]
 
-1. **Model A** - Beschreibung aus Suchergebnis
-   Quelle: https://example.com/article1
+Starte jetzt mit der Suche!`,
+		currentDate,
+		time.Now().Year())
 
-2. **Model B** - Beschreibung aus Suchergebnis
-   Quelle: https://example.com/article2
-
-KRITISCHE REGELN:
-- Nach EINER Suche SOFORT die Ergebnisse zusammenfassen mit FINAL_ANSWER
-- NIEMALS die gleiche Suche wiederholen
-- NIEMALS mehr als 2 Suchen durchführen
-- Nutze die Informationen aus den Suchergebnissen (Titel, Beschreibung)
-- Gib echte URLs aus den Suchergebnissen als Quellen an
-- Antworte auf Deutsch
-
-WENN DU SUCHERGEBNISSE SIEHST: Fasse sie SOFORT zusammen mit FINAL_ANSWER!`,
-		Tools:    []string{"web_search", "fetch_webpage", "search_news"},
-		MaxSteps: 6, // Reduced: 1 search + 1 optional fetch + final answer + buffer
-		Timeout:  120 * time.Second,
+	return AgentDefinition{
+		ID:           "web-researcher",
+		Name:         "Web-Recherche Agent",
+		Description:  "Spezialisierter Agent für Internet-Recherchen mit datenschutzfreundlichen Suchmaschinen",
+		SystemPrompt: systemPrompt,
+		Tools:        []string{"web_search", "fetch_webpage", "search_news"},
+		Model:        "ministral-3:14b", // Larger model for better instruction following
+		MaxSteps:     12,
+		Timeout:      300 * time.Second,
 	}
 }
 
@@ -209,10 +208,14 @@ func (a *WebResearchAgent) searchNewsHandler(ctx context.Context, params map[str
 		return nil, fmt.Errorf("query parameter required")
 	}
 
-	// Add "news" or "aktuell" to query for better news results
-	newsQuery := query + " news aktuell"
+	// Add current year and month for better recent results
+	currentYear := time.Now().Year()
+	currentMonth := time.Now().Format("January 2006")
 
-	resp, err := a.searchClient.Search(ctx, newsQuery, 8)
+	// Build news query with temporal context
+	newsQuery := fmt.Sprintf("%s %d news aktuell %s", query, currentYear, currentMonth)
+
+	resp, err := a.searchClient.Search(ctx, newsQuery, 10)
 	if err != nil {
 		return nil, err
 	}

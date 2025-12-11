@@ -32,6 +32,14 @@ type ModelInfo struct {
 	Available   bool
 }
 
+// AgentInfo represents an available agent
+type AgentInfo struct {
+	ID          string
+	Name        string
+	Description string
+	Tools       []string
+}
+
 // Message types for tea.Cmd async operations
 
 // chatResponseMsg is sent when chat response is received
@@ -90,6 +98,11 @@ type aristotelesPipelineMsg struct {
 	duration     time.Duration
 	enrichments  []string
 	err          error
+	// Agent Pipeline Info
+	agentID         string  // Agent ID wenn Leibniz verwendet wurde
+	agentName       string  // Agent Name aus Metadata
+	agentConfidence float64 // Agent Match Confidence aus Metadata
+	targetService   string  // Ziel-Service (Turing, Leibniz, etc.)
 }
 
 // aristotelesStatusMsg is sent when Aristoteles status is checked
@@ -97,3 +110,23 @@ type aristotelesStatusMsg struct {
 	online bool
 	err    error
 }
+
+// stepUpdateMsg is sent to update the current processing step display
+type stepUpdateMsg struct {
+	step string
+}
+
+// agentListMsg is sent when agent list is received from Leibniz
+type agentListMsg struct {
+	agents []AgentInfo
+	err    error
+}
+
+// Pipeline step names for display
+const (
+	StepAnalyzing   = "Analysiere Anfrage"
+	StepSearching   = "Web-Suche"
+	StepFetching    = "Lade Inhalte"
+	StepProcessing  = "Verarbeite Daten"
+	StepGenerating  = "Generiere Antwort"
+)

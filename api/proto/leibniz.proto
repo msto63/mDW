@@ -28,6 +28,10 @@ service LeibnizService {
   rpc RegisterTool(RegisterToolRequest) returns (ToolInfo);
   rpc UnregisterTool(UnregisterToolRequest) returns (mdw.common.Empty);
 
+  // Agent Matching (RAG-style agent selection)
+  rpc FindBestAgent(FindAgentRequest) returns (AgentMatchResponse);
+  rpc FindTopAgents(FindTopAgentsRequest) returns (AgentMatchListResponse);
+
   // Health
   rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
 }
@@ -39,6 +43,7 @@ message CreateAgentRequest {
   string system_prompt = 3;
   repeated string tools = 4;
   AgentConfig config = 5;
+  bool save_as_yaml = 6;  // If true, save as YAML file for hot-reload
 }
 
 message UpdateAgentRequest {
@@ -48,6 +53,7 @@ message UpdateAgentRequest {
   string system_prompt = 4;
   repeated string tools = 5;
   AgentConfig config = 6;
+  bool save_as_yaml = 7;  // If true, save as YAML file for hot-reload
 }
 
 message DeleteAgentRequest {
@@ -195,4 +201,24 @@ message RegisterToolRequest {
 
 message UnregisterToolRequest {
   string name = 1;
+}
+
+// Agent Matching (RAG-style agent selection)
+message FindAgentRequest {
+  string task_description = 1;  // The task description to match against agents
+}
+
+message FindTopAgentsRequest {
+  string task_description = 1;  // The task description to match against agents
+  int32 top_n = 2;              // Number of top agents to return (default: 3)
+}
+
+message AgentMatchResponse {
+  string agent_id = 1;
+  string agent_name = 2;
+  double similarity = 3;        // Cosine similarity score (0.0 - 1.0)
+}
+
+message AgentMatchListResponse {
+  repeated AgentMatchResponse matches = 1;
 }
