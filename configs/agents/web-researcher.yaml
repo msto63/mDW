@@ -49,7 +49,72 @@ platon_pipeline_id: web-research
 metadata:
     author: mDW
     category: research
-    version: "1.0.0"
+    version: "1.1.0"
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2  # 1 Initial + 1 Verbesserung falls nötig
+    min_quality_score: 0.7
+    criteria:
+        - name: "Quellenanzahl"
+          check: "Mindestens 2 verschiedene Quellen wurden zitiert oder referenziert"
+          required: true
+          weight: 1.5
+        - name: "Faktenbasiert"
+          check: "Aussagen sind mit konkreten Informationen aus den Quellen belegt"
+          required: true
+          weight: 1.0
+        - name: "Vollständigkeit"
+          check: "Die ursprüngliche Frage wurde vollständig beantwortet"
+          required: true
+          weight: 1.0
+        - name: "Aktualität"
+          check: "Die Informationen sind aktuell und relevant"
+          required: false
+          weight: 0.5
+    evaluation_prompt: |
+        Überprüfe das folgende Recherche-Ergebnis objektiv.
+
+        URSPRÜNGLICHE ANFRAGE:
+        {{ORIGINAL_TASK}}
+
+        RECHERCHE-ERGEBNIS:
+        {{RESULT}}
+
+        PRÜFKRITERIEN:
+        {{CRITERIA_LIST}}
+
+        Bewerte das Ergebnis und antworte im JSON-Format:
+        {
+            "passed": true/false,
+            "score": 0.0-1.0,
+            "criteria_results": [
+                {"name": "Quellenanzahl", "passed": true/false, "feedback": "Begründung"},
+                {"name": "Faktenbasiert", "passed": true/false, "feedback": "Begründung"},
+                {"name": "Vollständigkeit", "passed": true/false, "feedback": "Begründung"},
+                {"name": "Aktualität", "passed": true/false, "feedback": "Begründung"}
+            ],
+            "feedback": "Gesamtbewertung der Recherche",
+            "improvements": ["Konkrete Verbesserungsvorschläge"]
+        }
+    improvement_prompt: |
+        Verbessere deine Recherche basierend auf dem Feedback.
+
+        URSPRÜNGLICHE ANFRAGE:
+        {{ORIGINAL_TASK}}
+
+        BISHERIGES ERGEBNIS:
+        {{PREVIOUS_RESULT}}
+
+        FEEDBACK:
+        {{EVALUATION_FEEDBACK}}
+
+        NICHT ERFÜLLTE KRITERIEN:
+        {{FAILED_CRITERIA}}
+
+        Führe zusätzliche Recherchen durch und erstelle ein verbessertes Ergebnis.
+
 embedding:
     - 0.012522618286311626
     - 0.0028807749040424824

@@ -83,7 +83,35 @@ metadata:
     author: mDW
     category: content
     tags: writing, creative, marketing, content
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.7
+    criteria:
+        - name: "Struktur"
+          check: "Der Text hat einen klaren Aufbau (Einleitung, Hauptteil, Schluss oder Hook-Body-CTA)"
+          required: true
+          weight: 1.0
+        - name: "Zielgruppen-Anpassung"
+          check: "Tonalität und Sprache passen zur Zielgruppe und zum Medium"
+          required: true
+          weight: 1.0
+        - name: "Originalität"
+          check: "Der Text ist originell und vermeidet Klischees und Floskeln"
+          required: true
+          weight: 1.0
+        - name: "Längenangemessenheit"
+          check: "Die Textlänge entspricht dem angeforderten Format/Medium"
+          required: false
+          weight: 0.5
+        - name: "Lesbarkeit"
+          check: "Der Text ist flüssig lesbar mit variierenden Satzlängen"
+          required: true
+          weight: 0.8
+
 embedding:
     - -0.004508983809500933
     - -0.016316909343004227

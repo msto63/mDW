@@ -41,7 +41,7 @@ Beispiele:
 func init() {
 	rootCmd.AddCommand(chatCmd)
 
-	chatCmd.Flags().StringVarP(&chatModel, "model", "m", "llama3.2", "LLM-Modell")
+	chatCmd.Flags().StringVarP(&chatModel, "model", "m", "", "LLM-Modell (leer = Turing Default)")
 	chatCmd.Flags().StringVarP(&chatSystem, "system", "s", "", "System-Prompt")
 	chatCmd.Flags().Float64VarP(&chatTemperature, "temperature", "t", 0.7, "Temperatur (0.0-2.0)")
 	chatCmd.Flags().IntVar(&chatMaxTokens, "max-tokens", 2048, "Maximale Anzahl Tokens")
@@ -68,6 +68,17 @@ func runChatGRPC(ctx context.Context, args []string) error {
 		return fmt.Errorf("Turing-Service nicht erreichbar: %v\nStarte den Service mit: mdw serve turing", err)
 	}
 	defer conn.Close()
+
+	// Get default model from Turing if not specified
+	if chatModel == "" {
+		configResp, err := client.GetConfig(ctx, &turingpb.GetConfigRequest{})
+		if err != nil {
+			// Fallback to a reasonable default if config can't be fetched
+			chatModel = "mistral:7b"
+		} else {
+			chatModel = configResp.DefaultModel
+		}
+	}
 
 	// Single message mode
 	if len(args) > 0 {
@@ -276,6 +287,11 @@ func runChatDirect(ctx context.Context, args []string) error {
 
 	if err := client.Ping(ctx); err != nil {
 		return fmt.Errorf("Ollama nicht erreichbar: %v\nStarte Ollama mit: ollama serve", err)
+	}
+
+	// Use default model if not specified
+	if chatModel == "" {
+		chatModel = "mistral:7b"
 	}
 
 	if len(args) > 0 {

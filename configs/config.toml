@@ -136,3 +136,50 @@ max_log_size = "100MB"
 enabled = true
 max_files = 10
 compress = true
+
+# ─────────────────────────────────────────────────────────────────
+# PLATON - Pipeline Processing
+# ─────────────────────────────────────────────────────────────────
+[platon]
+port = 9130
+host = "0.0.0.0"
+default_timeout = "30s"
+
+[platon.handlers]
+# Built-in Handler aktivieren
+pii_detection = true      # PII-Erkennung (Email, Telefon, IBAN, Kreditkarte)
+safety_check = true       # Safety-Filter
+content_filter = false    # Content-Filterung (optional)
+
+[platon.pipeline]
+# Default Pipeline-Einstellungen
+max_handlers = 20
+enable_audit = true
+fail_on_block = true
+
+# ─────────────────────────────────────────────────────────────────
+# ARISTOTELES - Agentic Pipeline
+# ─────────────────────────────────────────────────────────────────
+[aristoteles]
+port = 9160
+host = "0.0.0.0"
+default_timeout = "180s"
+
+[aristoteles.intent]
+# Intent-Analyse Einstellungen
+model = "mistral:7b"
+confidence_threshold = 0.7
+max_retries = 2
+
+[aristoteles.pipeline]
+# Pipeline-Einstellungen
+max_iterations = 3
+quality_threshold = 0.8
+enable_web_search = true
+enable_rag = true
+
+[aristoteles.routing]
+# Service-Routing Konfiguration
+code_model = "qwen2.5-coder:7b"
+creative_temperature = 0.9
+factual_temperature = 0.3

@@ -198,18 +198,39 @@ func (a *Analyzer) analyzeLocal(prompt string) (*pb.IntentResult, error) {
 		}
 	}
 
-	// Web research keywords
-	webKeywords := []string{"search", "find", "look up", "what is the latest", "current", "news", "2024", "2025", "recent", "today"}
+	// Web research keywords (English only - prompts are translated before analysis)
+	// Note: Avoid short keywords like "now" that can match within other words
+	webKeywords := []string{
+		"search", "find", "look up", "what is the latest", "current", "news",
+		"recent", "today", "yesterday", "this week", "this month", "breaking",
+		"latest", "currently", "at the moment", "right now", "happening now",
+	}
+	webResearchDetected := false
 	for _, kw := range webKeywords {
 		if strings.Contains(lower, kw) {
-			if result.Primary == pb.IntentType_INTENT_TYPE_DIRECT_LLM {
-				result.Primary = pb.IntentType_INTENT_TYPE_WEB_RESEARCH
-			} else {
-				result.Secondary = append(result.Secondary, pb.IntentType_INTENT_TYPE_WEB_RESEARCH)
-			}
-			result.Confidence = 0.8
+			webResearchDetected = true
 			break
 		}
+	}
+
+	// Dynamic year detection (current year ± 1)
+	if !webResearchDetected {
+		currentYear := time.Now().Year()
+		for year := currentYear - 1; year <= currentYear+1; year++ {
+			if strings.Contains(lower, fmt.Sprintf("%d", year)) {
+				webResearchDetected = true
+				break
+			}
+		}
+	}
+
+	if webResearchDetected {
+		if result.Primary == pb.IntentType_INTENT_TYPE_DIRECT_LLM {
+			result.Primary = pb.IntentType_INTENT_TYPE_WEB_RESEARCH
+		} else {
+			result.Secondary = append(result.Secondary, pb.IntentType_INTENT_TYPE_WEB_RESEARCH)
+		}
+		result.Confidence = 0.8
 	}
 
 	// RAG keywords

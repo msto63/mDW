@@ -91,7 +91,35 @@ metadata:
     author: mDW
     category: language
     tags: translation, localization, multilingual
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.8
+    criteria:
+        - name: "Vollständigkeit"
+          check: "Der gesamte Quelltext wurde übersetzt, nichts fehlt"
+          required: true
+          weight: 1.5
+        - name: "Bedeutungstreue"
+          check: "Die Übersetzung gibt die Bedeutung des Originals korrekt wieder"
+          required: true
+          weight: 1.5
+        - name: "Natürlichkeit"
+          check: "Die Übersetzung klingt in der Zielsprache natürlich und idiomatisch"
+          required: true
+          weight: 1.0
+        - name: "Formaterhalt"
+          check: "Formatierungen, Listen und Strukturen wurden beibehalten"
+          required: true
+          weight: 0.8
+        - name: "Fachterminologie"
+          check: "Fachbegriffe wurden korrekt und konsistent übersetzt"
+          required: false
+          weight: 0.5
+
 embedding:
     - 0.006275466177612543
     - 0.03051586262881756

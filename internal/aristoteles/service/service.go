@@ -15,44 +15,48 @@ import (
 	"github.com/msto63/mDW/internal/aristoteles/quality"
 	"github.com/msto63/mDW/internal/aristoteles/router"
 	"github.com/msto63/mDW/internal/aristoteles/strategy"
+	"github.com/msto63/mDW/internal/aristoteles/translation"
 	"github.com/msto63/mDW/pkg/core/logging"
 )
 
 // Service is the Aristoteles business logic service
 type Service struct {
-	engine   *pipeline.Engine
-	intent   *intent.Analyzer
-	strategy *strategy.Selector
-	enricher *enrichment.Enricher
-	quality  *quality.Evaluator
-	router   *router.Router
-	clients  *clients.ServiceClients
-	logger   *logging.Logger
-	config   *Config
+	engine      *pipeline.Engine
+	translation *translation.Stage
+	intent      *intent.Analyzer
+	strategy    *strategy.Selector
+	enricher    *enrichment.Enricher
+	quality     *quality.Evaluator
+	router      *router.Router
+	clients     *clients.ServiceClients
+	logger      *logging.Logger
+	config      *Config
 }
 
 // Config holds service configuration
 type Config struct {
-	MaxIterations           int
-	QualityThreshold        float32
-	EnableWebSearch         bool
-	EnableRAG               bool
-	DefaultTimeoutSeconds   int
-	IntentModel             string
+	MaxIterations             int
+	QualityThreshold          float32
+	EnableWebSearch           bool
+	EnableRAG                 bool
+	DefaultTimeoutSeconds     int
+	IntentModel               string
 	IntentConfidenceThreshold float32
-	ModelMappings           map[string]string
+	ModelMappings             map[string]string
+	TranslationModel          string // Model for prompt translation (default: llama3.2:3b)
 }
 
 // DefaultConfig returns default service configuration
 func DefaultConfig() *Config {
 	return &Config{
-		MaxIterations:           3,
-		QualityThreshold:        0.8,
-		EnableWebSearch:         true,
-		EnableRAG:               true,
-		DefaultTimeoutSeconds:   180, // Increased for agent tasks like web research
-		IntentModel:             "mistral:7b",
+		MaxIterations:             3,
+		QualityThreshold:          0.8,
+		EnableWebSearch:           true,
+		EnableRAG:                 true,
+		DefaultTimeoutSeconds:     180, // Increased for agent tasks like web research
+		IntentModel:               "mistral:7b",
 		IntentConfidenceThreshold: 0.7,
+		TranslationModel:          "llama3.2:3b", // Fast model for translation
 		ModelMappings: map[string]string{
 			"DIRECT_LLM":         "mistral:7b",
 			"CODE_GENERATION":    "qwen2.5:7b",
@@ -74,6 +78,14 @@ func NewService(cfg *Config, serviceClients *clients.ServiceClients) *Service {
 	}
 
 	// Create components
+	translationModel := cfg.TranslationModel
+	if translationModel == "" {
+		translationModel = "llama3.2:3b"
+	}
+	translationStage := translation.NewStage(&translation.Config{
+		Model: translationModel,
+	})
+
 	intentAnalyzer := intent.NewAnalyzer(&intent.Config{
 		Model:               cfg.IntentModel,
 		ConfidenceThreshold: cfg.IntentConfidenceThreshold,
@@ -98,23 +110,27 @@ func NewService(cfg *Config, serviceClients *clients.ServiceClients) *Service {
 
 	// Wire up service clients
 	if serviceClients != nil {
-		// Set up intent analyzer LLM func
+		// Create shared LLM function for translation and intent analysis
 		if serviceClients.Turing != nil {
-			intentAnalyzer.SetLLMFunc(func(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+			llmFunc := func(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
 				resp, err := serviceClients.Turing.Chat(ctx, &turingpb.ChatRequest{
 					Model: model,
 					Messages: []*turingpb.Message{
 						{Role: "system", Content: systemPrompt},
 						{Role: "user", Content: userPrompt},
 					},
-					Temperature: 0.1, // Low temperature for classification
+					Temperature: 0.1, // Low temperature for classification/translation
 					MaxTokens:   500,
 				})
 				if err != nil {
 					return "", err
 				}
 				return resp.Content, nil
-			})
+			}
+
+			// Set LLM func for both translation and intent analysis
+			translationStage.SetLLMFunc(llmFunc)
+			intentAnalyzer.SetLLMFunc(llmFunc)
 
 			routerInst.SetTuringClient(clients.NewTuringWrapper(serviceClients.Turing))
 		}
@@ -146,6 +162,8 @@ func NewService(cfg *Config, serviceClients *clients.ServiceClients) *Service {
 	})
 
 	// Add stages to pipeline
+	// Translation stage first - translates non-English prompts for language-agnostic intent analysis
+	engine.AddStage(translationStage)
 	engine.AddStage(intent.NewStage(intentAnalyzer))
 	engine.AddStage(strategy.NewStage(strategySelector))
 	engine.AddStage(enrichment.NewStage(enricher, cfg.MaxIterations))
@@ -153,15 +171,16 @@ func NewService(cfg *Config, serviceClients *clients.ServiceClients) *Service {
 	engine.AddStage(router.NewStage(routerInst))
 
 	return &Service{
-		engine:   engine,
-		intent:   intentAnalyzer,
-		strategy: strategySelector,
-		enricher: enricher,
-		quality:  qualityEval,
-		router:   routerInst,
-		clients:  serviceClients,
-		logger:   logging.New("aristoteles-service"),
-		config:   cfg,
+		engine:      engine,
+		translation: translationStage,
+		intent:      intentAnalyzer,
+		strategy:    strategySelector,
+		enricher:    enricher,
+		quality:     qualityEval,
+		router:      routerInst,
+		clients:     serviceClients,
+		logger:      logging.New("aristoteles-service"),
+		config:      cfg,
 	}
 }
 

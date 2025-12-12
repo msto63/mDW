@@ -98,7 +98,35 @@ metadata:
     author: mDW
     category: education
     tags: learning, tutoring, education, teaching
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.75
+    criteria:
+        - name: "Verständlichkeit"
+          check: "Die Erklärung ist klar und dem Vorwissen der Zielgruppe angepasst"
+          required: true
+          weight: 1.5
+        - name: "Struktur"
+          check: "Die Erklärung folgt einer logischen Struktur (Was, Warum, Wie)"
+          required: true
+          weight: 1.0
+        - name: "Beispiele"
+          check: "Konkrete Beispiele oder Analogien werden verwendet"
+          required: true
+          weight: 1.0
+        - name: "Interaktivität"
+          check: "Es werden Fragen gestellt oder Übungsmöglichkeiten angeboten"
+          required: false
+          weight: 0.5
+        - name: "Vollständigkeit"
+          check: "Die ursprüngliche Frage wurde vollständig beantwortet"
+          required: true
+          weight: 1.0
+
 embedding:
     - 0.012591510079801083
     - 0.0034948696848005056

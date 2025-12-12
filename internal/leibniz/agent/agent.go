@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/msto63/mDW/internal/leibniz/agentloader"
+	"github.com/msto63/mDW/internal/leibniz/evaluator"
 	"github.com/msto63/mDW/pkg/core/logging"
 )
 
@@ -73,6 +75,11 @@ type Execution struct {
 	StartedAt time.Time
 	EndedAt   time.Time
 	ToolsUsed []string
+
+	// Evaluation tracking
+	Iterations        int                              // Number of iterations performed
+	EvaluationResults []*agentloader.EvaluationResult  // Results from each evaluation
+	FinalQualityScore float32                          // Final quality score after all iterations
 }
 
 // LLMFunc is a function that generates LLM responses
@@ -367,6 +374,99 @@ func (a *Agent) Execute(ctx context.Context, task string) (*Execution, error) {
 	)
 
 	return execution, nil
+}
+
+// ExecuteWithEvaluation runs the agent with self-evaluation and iterative improvement
+func (a *Agent) ExecuteWithEvaluation(
+	ctx context.Context,
+	task string,
+	agentDef *agentloader.AgentYAML,
+	eval *evaluator.Evaluator,
+) (*Execution, error) {
+	// If no evaluation configured or evaluator is nil, fall back to standard execution
+	if agentDef == nil || agentDef.Evaluation == nil || !agentDef.Evaluation.Enabled || eval == nil {
+		return a.Execute(ctx, task)
+	}
+
+	evalConfig := agentDef.Evaluation
+	maxIterations := evalConfig.MaxIterations
+	if maxIterations < 1 {
+		maxIterations = 1
+	}
+
+	var finalExecution *Execution
+	var lastResult string
+	var evaluationResults []*agentloader.EvaluationResult
+
+	for iteration := 1; iteration <= maxIterations; iteration++ {
+		a.logger.Info("Starting evaluation iteration",
+			"agent", agentDef.ID,
+			"iteration", iteration,
+			"max_iterations", maxIterations,
+		)
+
+		// Determine the prompt for this iteration
+		currentTask := task
+		if iteration > 1 && lastResult != "" && len(evaluationResults) > 0 {
+			// Use improvement prompt for subsequent iterations
+			lastEval := evaluationResults[len(evaluationResults)-1]
+			currentTask = eval.BuildImprovementPrompt(agentDef, task, lastResult, lastEval)
+		}
+
+		// Execute the agent
+		execution, err := a.Execute(ctx, currentTask)
+		if err != nil {
+			return execution, err
+		}
+
+		finalExecution = execution
+		lastResult = execution.Result
+		execution.Iterations = iteration
+
+		// Evaluate the result
+		evalResult, err := eval.EvaluateResult(ctx, agentDef, task, execution.Result)
+		if err != nil {
+			a.logger.Warn("Evaluation failed, accepting result",
+				"error", err,
+				"iteration", iteration,
+			)
+			// Accept result if evaluation fails
+			break
+		}
+
+		evalResult.Iteration = iteration
+		evaluationResults = append(evaluationResults, evalResult)
+		execution.EvaluationResults = evaluationResults
+		execution.FinalQualityScore = evalResult.Score
+
+		a.logger.Info("Evaluation completed",
+			"agent", agentDef.ID,
+			"iteration", iteration,
+			"passed", evalResult.Passed,
+			"score", evalResult.Score,
+			"feedback", evalResult.Feedback,
+		)
+
+		// Check if we should iterate
+		if evalResult.Passed {
+			a.logger.Info("Evaluation passed, accepting result",
+				"agent", agentDef.ID,
+				"iterations", iteration,
+				"final_score", evalResult.Score,
+			)
+			break
+		}
+
+		if !eval.ShouldIterate(agentDef, evalResult, iteration) {
+			a.logger.Info("Max iterations reached or no improvement possible",
+				"agent", agentDef.ID,
+				"iterations", iteration,
+			)
+			break
+		}
+	}
+
+	return finalExecution, nil
 }
 
 // buildSystemPrompt builds the system prompt with tool descriptions

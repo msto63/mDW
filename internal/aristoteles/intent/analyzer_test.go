@@ -297,3 +297,131 @@ func TestStringToComplexity(t *testing.T) {
 		})
 	}
 }
+
+// TestAnalyzeLocalWebResearchEnglish tests English web research keywords
+// Note: German and other languages are handled by the translation stage which
+// translates prompts to English before intent analysis
+func TestAnalyzeLocalWebResearchEnglish(t *testing.T) {
+	analyzer := NewAnalyzer(nil)
+	ctx := context.Background()
+
+	testCases := []struct {
+		name   string
+		prompt string
+	}{
+		{"current", "What are the current news about AI?"},
+		{"latest", "What is the latest on climate change?"},
+		{"today", "What happened today in technology?"},
+		{"recent", "Show me recent developments in AI"},
+		{"search", "Search for information about quantum computing"},
+		{"breaking", "What is the breaking news?"},
+		{"happening now", "What is happening now in the market?"},
+		{"this week", "What happened this week in politics?"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := analyzer.Analyze(ctx, tc.prompt, "")
+
+			if err != nil {
+				t.Fatalf("Analyze returned error: %v", err)
+			}
+
+			// Should detect WEB_RESEARCH as primary or secondary intent
+			hasWebResearch := result.Primary == pb.IntentType_INTENT_TYPE_WEB_RESEARCH
+			for _, sec := range result.Secondary {
+				if sec == pb.IntentType_INTENT_TYPE_WEB_RESEARCH {
+					hasWebResearch = true
+					break
+				}
+			}
+
+			if !hasWebResearch {
+				t.Errorf("Expected WEB_RESEARCH intent for prompt %q, got primary=%s, secondary=%v",
+					tc.prompt, result.Primary.String(), result.Secondary)
+			}
+		})
+	}
+}
+
+// TestAnalyzeLocalWebResearchDynamicYear tests dynamic year detection
+func TestAnalyzeLocalWebResearchDynamicYear(t *testing.T) {
+	analyzer := NewAnalyzer(nil)
+	ctx := context.Background()
+
+	currentYear := time.Now().Year()
+	testCases := []struct {
+		name   string
+		prompt string
+	}{
+		{"current year", "What were the major events in " + time.Now().Format("2006") + "?"},
+		{"next year", "What are the predictions for " + time.Now().AddDate(1, 0, 0).Format("2006") + "?"},
+		{"last year", "What happened in " + time.Now().AddDate(-1, 0, 0).Format("2006") + "?"},
+	}
+
+	// Add year to test case names for clarity
+	_ = currentYear
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := analyzer.Analyze(ctx, tc.prompt, "")
+
+			if err != nil {
+				t.Fatalf("Analyze returned error: %v", err)
+			}
+
+			// Should detect WEB_RESEARCH
+			hasWebResearch := result.Primary == pb.IntentType_INTENT_TYPE_WEB_RESEARCH
+			for _, sec := range result.Secondary {
+				if sec == pb.IntentType_INTENT_TYPE_WEB_RESEARCH {
+					hasWebResearch = true
+					break
+				}
+			}
+
+			if !hasWebResearch {
+				t.Errorf("Expected WEB_RESEARCH intent for prompt %q (year detection), got primary=%s",
+					tc.prompt, result.Primary.String())
+			}
+		})
+	}
+}
+
+// TestAnalyzeNoFalsePositiveWebResearch tests that non-research prompts don't trigger web research
+func TestAnalyzeNoFalsePositiveWebResearch(t *testing.T) {
+	analyzer := NewAnalyzer(nil)
+	ctx := context.Background()
+
+	// These should NOT trigger web research
+	testCases := []struct {
+		name            string
+		prompt          string
+		expectedPrimary pb.IntentType
+	}{
+		{"code generation", "Implement a new function in Python", pb.IntentType_INTENT_TYPE_CODE_GENERATION},
+		{"greeting", "Hello, how are you?", pb.IntentType_INTENT_TYPE_DIRECT_LLM},
+		{"creative", "Write a story about a knight", pb.IntentType_INTENT_TYPE_CREATIVE},
+		{"summarize", "Summarize this article for me", pb.IntentType_INTENT_TYPE_SUMMARIZATION},
+		{"translate", "Translate this text to German", pb.IntentType_INTENT_TYPE_TRANSLATION},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := analyzer.Analyze(ctx, tc.prompt, "")
+
+			if err != nil {
+				t.Fatalf("Analyze returned error: %v", err)
+			}
+
+			if result.Primary != tc.expectedPrimary {
+				t.Errorf("Expected primary %s for prompt %q, got %s",
+					tc.expectedPrimary.String(), tc.prompt, result.Primary.String())
+			}
+
+			// Verify web research is not the primary intent
+			if result.Primary == pb.IntentType_INTENT_TYPE_WEB_RESEARCH {
+				t.Errorf("Should NOT trigger WEB_RESEARCH as primary for prompt %q", tc.prompt)
+			}
+		})
+	}
+}

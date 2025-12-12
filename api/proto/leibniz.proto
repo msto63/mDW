@@ -99,6 +99,9 @@ message ExecuteRequest {
   string conversation_id = 3;
   map<string, string> variables = 4;
   bool auto_approve_tools = 5;
+  // Evaluation control
+  bool skip_evaluation = 6;       // Skip self-evaluation even if agent has it enabled
+  int32 max_eval_iterations = 7;  // Override max iterations (0 = use agent default)
 }
 
 message ExecuteResponse {
@@ -110,6 +113,25 @@ message ExecuteResponse {
   int64 duration_ms = 6;
   int32 total_tokens = 7;
   string conversation_id = 8;
+  // Evaluation info
+  EvaluationInfo evaluation = 9;
+}
+
+// EvaluationInfo contains self-evaluation results
+message EvaluationInfo {
+  bool performed = 1;             // Whether evaluation was performed
+  int32 iterations_used = 2;      // Number of evaluation iterations performed
+  float final_score = 3;          // Final quality score (0.0 - 1.0)
+  bool passed = 4;                // Whether evaluation passed
+  string feedback = 5;            // Evaluation feedback/summary
+  repeated CriterionResult criteria = 6;  // Individual criterion results
+}
+
+message CriterionResult {
+  string name = 1;
+  bool passed = 2;
+  bool required = 3;
+  string feedback = 4;
 }
 
 enum ExecutionStatus {

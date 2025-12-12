@@ -149,7 +149,17 @@ func (s *Server) Execute(ctx context.Context, req *pb.ExecuteRequest) (*pb.Execu
 		agentID = "default"
 	}
 
-	resp, err := s.service.ExecuteWithAgent(ctx, agentID, req.Message)
+	// Build evaluation options from request
+	var evalOpts *service.EvaluationOptions
+	if req.SkipEvaluation || req.MaxEvalIterations > 0 {
+		evalOpts = &service.EvaluationOptions{
+			SkipEvaluation: req.SkipEvaluation,
+			MaxIterations:  int(req.MaxEvalIterations),
+		}
+	}
+
+	// Use evaluation-aware execution
+	resp, err := s.service.ExecuteWithAgentAndEvaluation(ctx, agentID, req.Message, evalOpts)
 	if err != nil && resp == nil {
 		s.logger.Error("Execute failed", "error", err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -460,7 +470,7 @@ func executeResponseToProto(resp *service.ExecuteResponse) *pb.ExecuteResponse {
 		}
 	}
 
-	return &pb.ExecuteResponse{
+	pbResp := &pb.ExecuteResponse{
 		ExecutionId: resp.ID,
 		Status:      stringToExecutionStatus(resp.Status),
 		Response:    resp.Result,
@@ -468,6 +478,27 @@ func executeResponseToProto(resp *service.ExecuteResponse) *pb.ExecuteResponse {
 		Iterations:  int32(len(resp.Steps)),
 		DurationMs:  resp.Duration.Milliseconds(),
 	}
+
+	// Add evaluation info if available
+	if resp.Evaluation != nil {
+		pbResp.Evaluation = &pb.EvaluationInfo{
+			Performed:      resp.Evaluation.Performed,
+			IterationsUsed: int32(resp.Evaluation.IterationsUsed),
+			FinalScore:     resp.Evaluation.FinalScore,
+			Passed:         resp.Evaluation.Passed,
+			Feedback:       resp.Evaluation.Feedback,
+		}
+		for _, cr := range resp.Evaluation.Criteria {
+			pbResp.Evaluation.Criteria = append(pbResp.Evaluation.Criteria, &pb.CriterionResult{
+				Name:     cr.Name,
+				Passed:   cr.Passed,
+				Required: cr.Required,
+				Feedback: cr.Feedback,
+			})
+		}
+	}
+
+	return pbResp
 }
 
 func stringToExecutionStatus(s string) pb.ExecutionStatus {

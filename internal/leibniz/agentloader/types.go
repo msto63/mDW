@@ -40,6 +40,9 @@ type AgentYAML struct {
 	PlatonEnabled    bool   `yaml:"platon_enabled,omitempty"`
 	PlatonPipelineID string `yaml:"platon_pipeline_id,omitempty"`
 
+	// Self-Evaluation configuration
+	Evaluation *EvaluationConfig `yaml:"evaluation,omitempty"`
+
 	// Metadata for extensibility
 	Metadata map[string]string `yaml:"metadata,omitempty"`
 
@@ -50,6 +53,76 @@ type AgentYAML struct {
 	// Internal tracking (not from YAML)
 	SourceFile string    `yaml:"-"`
 	LoadedAt   time.Time `yaml:"-"`
+}
+
+// EvaluationConfig defines self-evaluation settings for an agent
+type EvaluationConfig struct {
+	// Enabled activates self-evaluation for this agent
+	Enabled bool `yaml:"enabled"`
+
+	// MaxIterations limits the number of improvement cycles (1 = no iteration)
+	MaxIterations int `yaml:"max_iterations,omitempty"`
+
+	// Criteria defines the KPIs that must be fulfilled
+	Criteria []EvaluationCriterion `yaml:"criteria,omitempty"`
+
+	// EvaluationPrompt is the prompt template for self-evaluation
+	// Available placeholders: {{ORIGINAL_TASK}}, {{RESULT}}, {{CRITERIA_LIST}}
+	EvaluationPrompt string `yaml:"evaluation_prompt,omitempty"`
+
+	// ImprovementPrompt is the prompt template for improvement iterations
+	// Available placeholders: {{ORIGINAL_TASK}}, {{PREVIOUS_RESULT}}, {{EVALUATION_FEEDBACK}}, {{FAILED_CRITERIA}}
+	ImprovementPrompt string `yaml:"improvement_prompt,omitempty"`
+
+	// MinQualityScore is the minimum score (0.0-1.0) to pass evaluation
+	MinQualityScore float32 `yaml:"min_quality_score,omitempty"`
+
+	// EvaluationModel allows using a different model for evaluation (optional)
+	EvaluationModel string `yaml:"evaluation_model,omitempty"`
+}
+
+// EvaluationCriterion defines a single KPI for evaluation
+type EvaluationCriterion struct {
+	// Name is the criterion identifier
+	Name string `yaml:"name"`
+
+	// Check describes what to verify (used in evaluation prompt)
+	Check string `yaml:"check"`
+
+	// Required indicates if this criterion must pass
+	Required bool `yaml:"required,omitempty"`
+
+	// Weight for scoring (default: 1.0)
+	Weight float32 `yaml:"weight,omitempty"`
+}
+
+// EvaluationResult represents the result of a self-evaluation
+type EvaluationResult struct {
+	// Passed indicates if all required criteria were met
+	Passed bool
+
+	// Score is the overall quality score (0.0-1.0)
+	Score float32
+
+	// CriteriaResults contains individual criterion results
+	CriteriaResults []CriterionResult
+
+	// Feedback is the LLM's explanation
+	Feedback string
+
+	// Improvements lists suggested improvements (if not passed)
+	Improvements []string
+
+	// Iteration is the current iteration number
+	Iteration int
+}
+
+// CriterionResult represents the result of a single criterion check
+type CriterionResult struct {
+	Name     string
+	Passed   bool
+	Required bool
+	Feedback string
 }
 
 // ToolConfig allows per-agent tool configuration
@@ -80,7 +153,81 @@ func (a *AgentYAML) Defaults() {
 			a.Tools[i].Enabled = true
 		}
 	}
+
+	// Apply evaluation defaults if enabled
+	if a.Evaluation != nil && a.Evaluation.Enabled {
+		a.Evaluation.Defaults()
+	}
 }
+
+// Defaults applies default values to the evaluation config
+func (e *EvaluationConfig) Defaults() {
+	if e.MaxIterations == 0 {
+		e.MaxIterations = 2 // Default: 1 initial + 1 improvement
+	}
+	if e.MinQualityScore == 0 {
+		e.MinQualityScore = 0.7 // 70% quality threshold
+	}
+
+	// Set default weights for criteria
+	for i := range e.Criteria {
+		if e.Criteria[i].Weight == 0 {
+			e.Criteria[i].Weight = 1.0
+		}
+	}
+
+	// Default evaluation prompt if not set
+	if e.EvaluationPrompt == "" {
+		e.EvaluationPrompt = DefaultEvaluationPrompt
+	}
+
+	// Default improvement prompt if not set
+	if e.ImprovementPrompt == "" {
+		e.ImprovementPrompt = DefaultImprovementPrompt
+	}
+}
+
+// DefaultEvaluationPrompt is the default prompt for self-evaluation
+const DefaultEvaluationPrompt = `Überprüfe das folgende Ergebnis anhand der gegebenen Kriterien.
+
+URSPRÜNGLICHE AUFGABE:
+{{ORIGINAL_TASK}}
+
+ERGEBNIS:
+{{RESULT}}
+
+ZU PRÜFENDE KRITERIEN:
+{{CRITERIA_LIST}}
+
+Antworte im folgenden JSON-Format:
+{
+  "passed": true/false,
+  "score": 0.0-1.0,
+  "criteria_results": [
+    {"name": "Kriterium1", "passed": true/false, "feedback": "Begründung"}
+  ],
+  "feedback": "Gesamtbewertung",
+  "improvements": ["Verbesserung 1", "Verbesserung 2"]
+}
+`
+
+// DefaultImprovementPrompt is the default prompt for improvement iterations
+const DefaultImprovementPrompt = `Verbessere dein vorheriges Ergebnis basierend auf dem Feedback.
+
+URSPRÜNGLICHE AUFGABE:
+{{ORIGINAL_TASK}}
+
+VORHERIGES ERGEBNIS:
+{{PREVIOUS_RESULT}}
+
+FEEDBACK ZUR VERBESSERUNG:
+{{EVALUATION_FEEDBACK}}
+
+NICHT ERFÜLLTE KRITERIEN:
+{{FAILED_CRITERIA}}
+
+Erstelle eine verbesserte Version, die die genannten Probleme behebt.
+`
 
 // GetToolNames returns a list of enabled tool names
 func (a *AgentYAML) GetToolNames() []string {

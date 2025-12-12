@@ -17,7 +17,31 @@ metadata:
     author: mDW
     category: creativity
     tags: brainstorming, ideation, creativity, problem-solving
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.7
+    criteria:
+        - name: "Ideenanzahl"
+          check: "Mindestens 5 verschiedene Ideen wurden generiert"
+          required: true
+          weight: 1.5
+        - name: "Vielfalt"
+          check: "Die Ideen decken verschiedene Perspektiven oder Ansätze ab"
+          required: true
+          weight: 1.0
+        - name: "Relevanz"
+          check: "Alle Ideen beziehen sich auf die ursprüngliche Fragestellung"
+          required: true
+          weight: 1.0
+        - name: "Kreativität"
+          check: "Mindestens eine unkonventionelle oder überraschende Idee ist dabei"
+          required: false
+          weight: 0.8
+
 embedding:
     - -0.02459934540092945
     - 0.0017389231361448765

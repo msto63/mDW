@@ -37,6 +37,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	// Define services with correct ports from CLAUDE.md
+	// All 9 services in port order
 	services := []struct {
 		name     string
 		port     int
@@ -46,8 +47,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		{"Kant (API Gateway)", 8080, "HTTP", checkHTTP(8080)},
 		{"Russell (Discovery)", 9100, "gRPC", checkGRPC(9100)},
 		{"Bayes (Logging)", 9120, "gRPC", checkGRPC(9120)},
+		{"Platon (Pipeline)", 9130, "gRPC", checkGRPC(9130)},
 		{"Leibniz (Agent)", 9140, "gRPC", checkGRPC(9140)},
 		{"Babbage (NLP)", 9150, "gRPC", checkGRPC(9150)},
+		{"Aristoteles (Agentic Pipeline)", 9160, "gRPC", checkGRPC(9160)},
 		{"Turing (LLM)", 9200, "gRPC", checkGRPC(9200)},
 		{"Hypatia (RAG)", 9220, "gRPC", checkGRPC(9220)},
 	}

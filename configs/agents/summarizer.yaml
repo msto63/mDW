@@ -94,7 +94,31 @@ metadata:
     author: mDW
     category: productivity
     tags: summary, text, extraction, documentation
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.75
+    criteria:
+        - name: "Prägnanz"
+          check: "Die Zusammenfassung ist kürzer als der Originaltext und enthält keine Redundanzen"
+          required: true
+          weight: 1.0
+        - name: "Kernaussagen"
+          check: "Alle wesentlichen Kernaussagen des Originals sind enthalten"
+          required: true
+          weight: 1.5
+        - name: "Keine Erfindungen"
+          check: "Es wurden keine Informationen hinzugefügt, die nicht im Original vorkommen"
+          required: true
+          weight: 1.0
+        - name: "Verständlichkeit"
+          check: "Die Zusammenfassung ist auch ohne Kenntnis des Originals verständlich"
+          required: false
+          weight: 0.5
+
 embedding:
     - 0.010194468311965466
     - 0.031825363636016846

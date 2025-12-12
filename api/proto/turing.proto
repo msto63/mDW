@@ -21,6 +21,9 @@ service TuringService {
   rpc GetModel(GetModelRequest) returns (ModelInfo);
   rpc PullModel(PullModelRequest) returns (stream PullProgress);
 
+  // Configuration
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+
   // Health
   rpc HealthCheck(mdw.common.HealthCheckRequest) returns (mdw.common.HealthCheckResponse);
 }
@@ -119,4 +122,15 @@ message PullProgress {
   int64 completed = 2;
   int64 total = 3;
   float percent = 4;
+}
+
+// Configuration
+message GetConfigRequest {}
+
+message GetConfigResponse {
+  string default_model = 1;
+  string default_provider = 2;
+  float default_temperature = 3;
+  int32 default_max_tokens = 4;
+  string ollama_url = 5;
 }

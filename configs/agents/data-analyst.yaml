@@ -80,7 +80,35 @@ metadata:
     author: mDW
     category: analysis
     tags: data, statistics, analysis, reporting
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.8
+    criteria:
+        - name: "Datenverständnis"
+          check: "Die Datenstruktur und -typen wurden korrekt erfasst und beschrieben"
+          required: true
+          weight: 1.0
+        - name: "Berechnungen"
+          check: "Statistische Berechnungen wurden durchgeführt und nachvollziehbar dargestellt"
+          required: true
+          weight: 1.5
+        - name: "Interpretation"
+          check: "Die Ergebnisse wurden verständlich interpretiert und Zusammenhänge erklärt"
+          required: true
+          weight: 1.0
+        - name: "Visualisierung"
+          check: "Daten wurden tabellarisch oder visuell aufbereitet dargestellt"
+          required: false
+          weight: 0.5
+        - name: "Handlungsempfehlungen"
+          check: "Konkrete Schlussfolgerungen oder Empfehlungen wurden abgeleitet"
+          required: true
+          weight: 1.0
+
 embedding:
     - 0.026045912876725197
     - -0.01348231639713049

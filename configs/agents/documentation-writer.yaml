@@ -65,7 +65,35 @@ metadata:
     author: mDW
     category: development
     tags: documentation, technical-writing, readme, api-docs
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.75
+    criteria:
+        - name: "Struktur"
+          check: "Die Dokumentation folgt einer logischen Struktur mit klaren Überschriften"
+          required: true
+          weight: 1.0
+        - name: "Vollständigkeit"
+          check: "Alle wichtigen Aspekte (Installation, Nutzung, Konfiguration) werden behandelt"
+          required: true
+          weight: 1.5
+        - name: "Code-Beispiele"
+          check: "Praktische Code-Beispiele sind enthalten und korrekt formatiert"
+          required: true
+          weight: 1.0
+        - name: "Markdown-Qualität"
+          check: "Markdown-Syntax wird korrekt verwendet (Überschriften, Listen, Code-Blöcke)"
+          required: true
+          weight: 0.8
+        - name: "Zielgruppengerecht"
+          check: "Sprache und Detailgrad sind für die Zielgruppe angemessen"
+          required: false
+          weight: 0.5
+
 embedding:
     - 0.009828083217144012
     - -0.0474054254591465

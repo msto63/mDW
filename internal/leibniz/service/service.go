@@ -8,11 +8,13 @@ import (
 
 	"github.com/msto63/mDW/internal/leibniz/agent"
 	"github.com/msto63/mDW/internal/leibniz/agentloader"
+	"github.com/msto63/mDW/internal/leibniz/evaluator"
 	"github.com/msto63/mDW/internal/leibniz/mcp"
 	"github.com/msto63/mDW/internal/leibniz/platon"
 	"github.com/msto63/mDW/internal/leibniz/store"
 	"github.com/msto63/mDW/internal/leibniz/tools"
 	"github.com/msto63/mDW/internal/leibniz/websearch"
+	"github.com/msto63/mDW/internal/turing/ollama"
 	"github.com/msto63/mDW/pkg/core/logging"
 )
 
@@ -25,15 +27,40 @@ type ExecuteRequest struct {
 	Context    map[string]string
 }
 
+// EvaluationOptions controls self-evaluation behavior
+type EvaluationOptions struct {
+	SkipEvaluation    bool // Skip evaluation even if agent has it enabled
+	MaxIterations     int  // Override max iterations (0 = use agent default)
+}
+
+// EvaluationInfo contains results of self-evaluation
+type EvaluationInfo struct {
+	Performed      bool
+	IterationsUsed int
+	FinalScore     float32
+	Passed         bool
+	Feedback       string
+	Criteria       []CriterionResultInfo
+}
+
+// CriterionResultInfo contains result of a single criterion
+type CriterionResultInfo struct {
+	Name     string
+	Passed   bool
+	Required bool
+	Feedback string
+}
+
 // ExecuteResponse represents an agent execution response
 type ExecuteResponse struct {
-	ID        string
-	Status    string
-	Result    string
-	Steps     []StepInfo
-	ToolsUsed []string
-	Duration  time.Duration
-	Error     string
+	ID         string
+	Status     string
+	Result     string
+	Steps      []StepInfo
+	ToolsUsed  []string
+	Duration   time.Duration
+	Error      string
+	Evaluation *EvaluationInfo // Self-evaluation results (nil if not performed)
 }
 
 // StepInfo represents information about an execution step
@@ -106,6 +133,10 @@ type Service struct {
 
 	// YAML-based agent loader with hot-reload
 	agentLoader *agentloader.Loader
+
+	// Self-evaluation support
+	evaluator   *evaluator.Evaluator
+	ollamaClient *ollama.Client
 
 	// In-memory storage (fallback when store is nil)
 	mu           sync.RWMutex
@@ -449,6 +480,20 @@ func (s *Service) SetLLMFunc(fn agent.LLMFunc) {
 // SetModelAwareLLMFunc sets the model-aware LLM function for the agent
 func (s *Service) SetModelAwareLLMFunc(fn agent.ModelAwareLLMFunc) {
 	s.agent.SetModelAwareLLMFunc(fn)
+}
+
+// SetOllamaClient sets the Ollama client for self-evaluation
+func (s *Service) SetOllamaClient(client *ollama.Client) {
+	s.ollamaClient = client
+	if client != nil {
+		s.evaluator = evaluator.New(client)
+		s.logger.Info("Self-evaluation support enabled")
+	}
+}
+
+// GetEvaluator returns the evaluator instance (may be nil)
+func (s *Service) GetEvaluator() *evaluator.Evaluator {
+	return s.evaluator
 }
 
 // registerBuiltinTools registers built-in tools
@@ -987,6 +1032,186 @@ func (s *Service) ExecuteWithAgent(ctx context.Context, agentID string, message 
 	}
 
 	return resp, err
+}
+
+// ExecuteWithAgentAndEvaluation runs a task with self-evaluation and iterative improvement
+// opts can be nil to use agent defaults
+func (s *Service) ExecuteWithAgentAndEvaluation(ctx context.Context, agentID string, message string, opts *EvaluationOptions) (*ExecuteResponse, error) {
+	// Check if evaluation should be skipped
+	if opts != nil && opts.SkipEvaluation {
+		s.logger.Info("Evaluation skipped by request", "agent", agentID)
+		return s.ExecuteWithAgent(ctx, agentID, message)
+	}
+
+	// Get YAML agent definition for evaluation config
+	var yamlAgent *agentloader.AgentYAML
+	if s.agentLoader != nil {
+		yamlAgent, _ = s.agentLoader.Get(agentID)
+	}
+
+	// If no YAML agent or no evaluation config, fall back to standard execution
+	if yamlAgent == nil || yamlAgent.Evaluation == nil || !yamlAgent.Evaluation.Enabled {
+		return s.ExecuteWithAgent(ctx, agentID, message)
+	}
+
+	// Check if evaluator is available
+	if s.evaluator == nil {
+		s.logger.Warn("Evaluation requested but evaluator not initialized, falling back to standard execution",
+			"agent", agentID)
+		return s.ExecuteWithAgent(ctx, agentID, message)
+	}
+
+	// Apply max iterations override if specified
+	if opts != nil && opts.MaxIterations > 0 {
+		// Create a copy of the evaluation config with overridden max iterations
+		evalCopy := *yamlAgent.Evaluation
+		evalCopy.MaxIterations = opts.MaxIterations
+		yamlAgent.Evaluation = &evalCopy
+		s.logger.Info("Max iterations overridden", "agent", agentID, "max_iterations", opts.MaxIterations)
+	}
+
+	s.mu.RLock()
+	agentDef, ok := s.agents[agentID]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	// Create execution record
+	s.mu.Lock()
+	s.nextExecID++
+	execID := fmt.Sprintf("exec_%d", s.nextExecID)
+
+	execCtx, cancel := context.WithTimeout(ctx, agentDef.Timeout*time.Duration(yamlAgent.Evaluation.MaxIterations+1))
+
+	record := &ExecutionRecord{
+		ID:        execID,
+		AgentID:   agentID,
+		Message:   message,
+		Status:    "running",
+		StartedAt: time.Now(),
+		Cancel:    cancel,
+	}
+	s.executions[execID] = record
+
+	if s.store != nil {
+		s.store.CreateExecution(context.Background(), toStoreExecution(record))
+	}
+	s.mu.Unlock()
+
+	// Store original settings to restore after execution
+	originalModel := s.agent.GetModel()
+	originalPrompt := s.agent.GetSystemPrompt()
+
+	// Set agent-specific model if defined
+	if agentDef.Model != "" {
+		s.agent.SetModel(agentDef.Model)
+	}
+
+	// Set agent-specific system prompt if defined
+	if agentDef.SystemPrompt != "" {
+		s.agent.SetSystemPrompt(agentDef.SystemPrompt)
+	}
+
+	// Defer restoration of original settings
+	defer func() {
+		s.agent.SetModel(originalModel)
+		s.agent.SetSystemPrompt(originalPrompt)
+	}()
+
+	s.logger.Info("Starting execution with self-evaluation",
+		"agent", agentID,
+		"max_iterations", yamlAgent.Evaluation.MaxIterations,
+		"criteria_count", len(yamlAgent.Evaluation.Criteria),
+	)
+
+	// Execute with evaluation loop
+	start := time.Now()
+	execution, err := s.agent.ExecuteWithEvaluation(execCtx, message, yamlAgent, s.evaluator)
+
+	response := &ExecuteResponse{
+		ID:        execID,
+		Status:    string(execution.Status),
+		Result:    execution.Result,
+		Error:     execution.Error,
+		Duration:  time.Since(start),
+		ToolsUsed: execution.ToolsUsed,
+	}
+
+	// Convert steps
+	for _, step := range execution.Steps {
+		stepInfo := StepInfo{
+			Index:     step.Index,
+			Thought:   step.Thought,
+			Action:    step.Action,
+			Timestamp: step.Timestamp,
+		}
+		if step.ToolCall != nil {
+			stepInfo.ToolName = step.ToolCall.Name
+			stepInfo.ToolInput = fmt.Sprintf("%v", step.ToolCall.Params)
+		}
+		if step.ToolResult != nil {
+			if step.ToolResult.Error != "" {
+				stepInfo.ToolOutput = "Error: " + step.ToolResult.Error
+			} else {
+				stepInfo.ToolOutput = fmt.Sprintf("%v", step.ToolResult.Result)
+			}
+		}
+		response.Steps = append(response.Steps, stepInfo)
+	}
+
+	// Add evaluation metadata to response
+	if execution.Iterations > 0 && len(execution.EvaluationResults) > 0 {
+		lastEval := execution.EvaluationResults[len(execution.EvaluationResults)-1]
+		evalInfo := &EvaluationInfo{
+			Performed:      true,
+			IterationsUsed: execution.Iterations,
+			FinalScore:     execution.FinalQualityScore,
+			Passed:         lastEval.Passed,
+			Feedback:       lastEval.Feedback,
+		}
+		// Convert criteria results
+		for _, cr := range lastEval.CriteriaResults {
+			evalInfo.Criteria = append(evalInfo.Criteria, CriterionResultInfo{
+				Name:     cr.Name,
+				Passed:   cr.Passed,
+				Required: cr.Required,
+				Feedback: cr.Feedback,
+			})
+		}
+		response.Evaluation = evalInfo
+
+		s.logger.Info("Execution completed with evaluation",
+			"agent", agentID,
+			"iterations", execution.Iterations,
+			"final_score", execution.FinalQualityScore,
+			"passed", lastEval.Passed,
+		)
+	}
+
+	// Update execution record
+	s.mu.Lock()
+	if record, ok := s.executions[execID]; ok {
+		record.Status = response.Status
+		record.Result = response.Result
+		record.Error = response.Error
+		record.Steps = response.Steps
+		record.ToolsUsed = response.ToolsUsed
+		record.CompletedAt = time.Now()
+		record.Duration = response.Duration
+		if err != nil {
+			record.Status = "error"
+			record.Error = err.Error()
+		}
+
+		if s.store != nil {
+			s.store.UpdateExecution(context.Background(), toStoreExecution(record))
+		}
+	}
+	s.mu.Unlock()
+
+	return response, err
 }
 
 // toStoreExecution converts service ExecutionRecord to store ExecutionRecord

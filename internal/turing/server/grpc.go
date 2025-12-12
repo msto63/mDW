@@ -302,3 +302,14 @@ func (s *Server) HealthCheck(ctx context.Context, _ *common.HealthCheckRequest) 
 		Details:       details,
 	}, nil
 }
+
+// GetConfig implements TuringServiceServer.GetConfig
+func (s *Server) GetConfig(ctx context.Context, _ *pb.GetConfigRequest) (*pb.GetConfigResponse, error) {
+	return &pb.GetConfigResponse{
+		DefaultModel:       s.config.DefaultModel,
+		DefaultProvider:    "ollama",
+		DefaultTemperature: 0.7,
+		DefaultMaxTokens:   2048,
+		OllamaUrl:          s.config.OllamaURL,
+	}, nil
+}

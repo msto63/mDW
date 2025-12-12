@@ -49,9 +49,24 @@ var toolsCmd = &cobra.Command{
 	RunE:  runListTools,
 }
 
+var agentsCmd = &cobra.Command{
+	Use:   "agents",
+	Short: "Liste verfügbare Agents",
+	Long: `Zeigt alle verfügbaren AI-Agents vom Leibniz-Service an.
+
+Agents können über YAML-Dateien in configs/agents/ definiert werden
+und werden automatisch geladen (Hot-Reload).
+
+Beispiele:
+  mdw agents            # Liste alle Agents
+  mdw agents --verbose  # Zeige detaillierte Informationen`,
+	RunE: runListAgents,
+}
+
 func init() {
 	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(toolsCmd)
+	rootCmd.AddCommand(agentsCmd)
 
 	agentCmd.Flags().IntVar(&agentMaxSteps, "max-steps", 10, "Maximale Anzahl Schritte")
 	agentCmd.Flags().DurationVar(&agentTimeout, "timeout", 2*time.Minute, "Timeout für die Ausführung")
@@ -60,6 +75,8 @@ func init() {
 	agentCmd.Flags().StringVar(&agentID, "agent", "default", "Agent-ID")
 
 	toolsCmd.Flags().BoolVar(&agentDirect, "direct", false, "Direkt ohne Leibniz Service")
+
+	agentsCmd.Flags().BoolVarP(&agentVerbose, "verbose", "v", false, "Zeige detaillierte Informationen")
 }
 
 func runAgent(cmd *cobra.Command, args []string) error {
@@ -431,6 +448,92 @@ func runListToolsDirect() error {
 	}
 
 	fmt.Printf("\nGesamt: %d Tool(s)\n", len(tools))
+
+	return nil
+}
+
+// runListAgents lists available agents from Leibniz service
+func runListAgents(cmd *cobra.Command, args []string) error {
+	addrs := DefaultServiceAddresses()
+	client, conn, err := NewLeibnizClient(addrs.Leibniz)
+	if err != nil {
+		return fmt.Errorf("Leibniz-Service nicht erreichbar: %v\nStarte den Service mit: mdw serve leibniz", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), gRPCTimeout)
+	defer cancel()
+
+	resp, err := client.ListAgents(ctx, &commonpb.Empty{})
+	if err != nil {
+		return fmt.Errorf("Agents konnten nicht abgerufen werden: %v", err)
+	}
+
+	fmt.Println("Verfügbare AI-Agents")
+	fmt.Println(strings.Repeat("=", 60))
+
+	if len(resp.Agents) == 0 {
+		fmt.Println("Keine Agents verfügbar.")
+		fmt.Println("\nTipp: Agents werden aus configs/agents/*.yaml geladen.")
+		return nil
+	}
+
+	for i, agent := range resp.Agents {
+		if i > 0 {
+			fmt.Println()
+		}
+
+		fmt.Printf("📦 %s\n", agent.Name)
+		fmt.Printf("   ID: %s\n", agent.Id)
+
+		if agent.Description != "" {
+			fmt.Printf("   Beschreibung: %s\n", agent.Description)
+		}
+
+		if agentVerbose {
+			// Show detailed information
+			if agent.Config != nil {
+				fmt.Printf("   Modell: %s\n", agent.Config.Model)
+				if agent.Config.Temperature > 0 {
+					fmt.Printf("   Temperatur: %.1f\n", agent.Config.Temperature)
+				}
+				if agent.Config.MaxIterations > 0 {
+					fmt.Printf("   Max Iterationen: %d\n", agent.Config.MaxIterations)
+				}
+				if agent.Config.UseKnowledgeBase {
+					fmt.Printf("   Wissensbasis: %s\n", agent.Config.KnowledgeCollection)
+				}
+				if agent.Config.EnablePlatonProcessing {
+					fmt.Printf("   Platon-Pipeline: %s\n", agent.Config.PlatonPipelineId)
+				}
+			}
+
+			if len(agent.Tools) > 0 {
+				fmt.Printf("   Tools: %s\n", strings.Join(agent.Tools, ", "))
+			}
+
+			if agent.SystemPrompt != "" {
+				// Show truncated system prompt
+				prompt := agent.SystemPrompt
+				if len(prompt) > 100 {
+					prompt = prompt[:100] + "..."
+				}
+				fmt.Printf("   System-Prompt: %s\n", prompt)
+			}
+		} else {
+			// Show brief info
+			if agent.Config != nil && agent.Config.Model != "" {
+				fmt.Printf("   Modell: %s\n", agent.Config.Model)
+			}
+			if len(agent.Tools) > 0 {
+				fmt.Printf("   Tools: %d\n", len(agent.Tools))
+			}
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", 60))
+	fmt.Printf("Gesamt: %d Agent(s)\n", len(resp.Agents))
 
 	return nil
 }

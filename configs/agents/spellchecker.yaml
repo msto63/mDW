@@ -91,7 +91,35 @@ metadata:
     author: mDW
     category: language
     tags: spelling, grammar, proofreading, german, english, correction
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.85
+    criteria:
+        - name: "Korrigierter Text"
+          check: "Der vollständig korrigierte Text wurde ausgegeben"
+          required: true
+          weight: 1.5
+        - name: "Änderungsübersicht"
+          check: "Alle Korrekturen wurden tabellarisch aufgelistet (Original, Korrektur, Regel)"
+          required: true
+          weight: 1.0
+        - name: "Fehlerfreiheit"
+          check: "Der korrigierte Text enthält keine offensichtlichen Rechtschreib- oder Grammatikfehler mehr"
+          required: true
+          weight: 1.5
+        - name: "Regelkonformität"
+          check: "Korrekturen folgen den aktuellen Rechtschreibregeln (Duden)"
+          required: true
+          weight: 1.0
+        - name: "Bedeutungserhalt"
+          check: "Die ursprüngliche Bedeutung des Textes wurde nicht verändert"
+          required: true
+          weight: 1.0
+
 embedding:
     - 0.011971295811235905
     - -0.04079938679933548

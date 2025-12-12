@@ -96,6 +96,13 @@ type Model struct {
 	lastAgentConfidence float64 // Confidence des Agent-Matchings
 	pipelineAgents    []string // Liste der Agents in der Pipeline (für Multi-Agent)
 
+	// Orchestrator state (für Multi-Task-Anzeige)
+	orchestratorActive   bool                // Orchestrator ist aktiv
+	orchestratorTasks    []*OrchestratorTask // Liste der Tasks im Orchestrator
+	currentTaskIndex     int                 // Index des aktuell laufenden Tasks
+	currentAgentName     string              // Name des aktuell aktiven Agents
+	orchestratorPhase    string              // Aktuelle Phase (decomposing, matching, executing)
+
 	// Agent selection state
 	availableAgents   []AgentInfo // Liste verfügbarer Agents
 	agentIndex        int         // Index des aktuell ausgewählten Agents in der Liste
@@ -143,11 +150,11 @@ func New(cfg Config) Model {
 	sp.Spinner = spinner.Dot
 	sp.Style = SpinnerStyle
 
-	// Default models
+	// Default models (werden beim Start durch Turing-Service überschrieben)
 	defaultModels := []ModelInfo{
-		{Name: "mistral:7b", Size: "4.1 GB", Description: "Schnell und effizient", Available: true},
-		{Name: "qwen2.5:7b", Size: "4.7 GB", Description: "Gut für Code", Available: true},
-		{Name: "llama3.2:latest", Size: "2.0 GB", Description: "Meta's neuestes Modell", Available: true},
+		{Name: "mistral:7b", Size: "4.1 GB", Description: "Schnell und effizient", Provider: "ollama", Available: true},
+		{Name: "qwen2.5:7b", Size: "4.7 GB", Description: "Gut für Code", Provider: "ollama", Available: true},
+		{Name: "llama3.2:latest", Size: "2.0 GB", Description: "Meta's neuestes Modell", Provider: "ollama", Available: true},
 	}
 
 	// Load saved model, fallback to config default
@@ -333,6 +340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case aristotelesPipelineMsg:
 		m.loading = false
 		m.currentStep = "" // Reset step display
+		m.orchestratorActive = false // Orchestrator done
 		if msg.err != nil {
 			m.err = msg.err
 			m.messages = append(m.messages, ChatMessage{
@@ -351,10 +359,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastAgentName = msg.agentName
 			m.lastAgentConfidence = msg.agentConfidence
 
+			// Orchestrator-Info speichern
+			m.pipelineAgents = msg.agentsUsed
+
 			// Model-Info mit Agent-Details formatieren
 			modelInfo := m.currentModel
-			if msg.agentName != "" {
-				// Agent wurde verwendet - zeige Agent-Info
+			if msg.isOrchestrated && len(msg.agentsUsed) > 0 {
+				// Orchestrator wurde verwendet - zeige Multi-Agent-Info
+				agentList := strings.Join(msg.agentsUsed, " → ")
+				modelInfo = fmt.Sprintf("Orchestrator [%d Tasks: %s]", msg.taskCount, agentList)
+			} else if msg.agentName != "" {
+				// Einzelner Agent wurde verwendet
 				modelInfo = fmt.Sprintf("%s [Agent: %s, %.0f%%]", msg.targetService, msg.agentName, msg.agentConfidence*100)
 			} else {
 				// Direkter Service-Aufruf
@@ -375,6 +390,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stepUpdateMsg:
 		m.currentStep = msg.step
+
+	case orchestratorProgressMsg:
+		// Update Orchestrator-Status für Anzeige
+		m.orchestratorActive = true
+		m.orchestratorTasks = msg.tasks
+		m.currentTaskIndex = msg.currentTaskIndex
+		m.currentAgentName = msg.currentAgentName
+		m.orchestratorPhase = msg.phase
+		// Update currentStep basierend auf Phase
+		switch msg.phase {
+		case "decomposing":
+			m.currentStep = StepDecomposing
+		case "matching":
+			m.currentStep = StepMatching
+		case "executing":
+			m.currentStep = StepOrchestrating
+		}
 
 	case agentListMsg:
 		if msg.err != nil {
@@ -644,10 +676,19 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.useAristoteles && m.aristotelesOnline {
 					m.loading = true
 					m.currentStep = StepAnalyzing
-					// Reset Agent-Info bis neue Antwort kommt
+					// Reset alle Status-Infos bis neue Antwort kommt
 					m.lastAgentID = ""
 					m.lastAgentName = ""
 					m.lastAgentConfidence = 0
+					m.lastStrategyName = ""
+					m.lastIntentType = ""
+					m.lastQualityScore = 0
+					// Reset Orchestrator-Status
+					m.orchestratorActive = false
+					m.orchestratorTasks = nil
+					m.currentTaskIndex = 0
+					m.currentAgentName = ""
+					m.orchestratorPhase = ""
 					return m, tea.Batch(
 						m.spinner.Tick,
 						m.sendMessageViaAristoteles(input),
@@ -918,6 +959,11 @@ func (m Model) renderInputArea() string {
 			statusText = fmt.Sprintf(" %s...", m.currentStep)
 		}
 		input = m.spinner.View() + ThinkingStyle.Render(statusText)
+
+		// Zeige erweiterte Task-Info bei Orchestrator
+		if m.orchestratorActive && len(m.orchestratorTasks) > 0 {
+			input += "\n" + m.renderTaskProgress()
+		}
 	} else if m.streaming {
 		input = m.spinner.View() + ThinkingStyle.Render(" Empfange Antwort...")
 	} else {
@@ -932,6 +978,44 @@ func (m Model) renderInputArea() string {
 	return style.Render(input)
 }
 
+// renderTaskProgress renders the orchestrator task progress
+func (m Model) renderTaskProgress() string {
+	if len(m.orchestratorTasks) == 0 {
+		return ""
+	}
+
+	var lines []string
+	lines = append(lines, HelpDescStyle.Render(fmt.Sprintf("Tasks (%d):", len(m.orchestratorTasks))))
+
+	for i, task := range m.orchestratorTasks {
+		var statusIcon string
+		var style lipgloss.Style
+
+		switch task.Status {
+		case "completed":
+			statusIcon = "✓"
+			style = StatusOnlineStyle
+		case "running":
+			statusIcon = "▶"
+			style = ThinkingStyle
+		case "failed":
+			statusIcon = "✗"
+			style = StatusOfflineStyle
+		default: // pending
+			statusIcon = "○"
+			style = HelpDescStyle
+		}
+
+		taskLine := fmt.Sprintf("  %s %d. %s", statusIcon, i+1, task.Description)
+		if task.AgentName != "" {
+			taskLine += fmt.Sprintf(" [%s]", task.AgentName)
+		}
+		lines = append(lines, style.Render(taskLine))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 // renderStatusBar renders the status bar with current model and version
 func (m Model) renderStatusBar() string {
 	// Left: Model info with Aristoteles indicator
@@ -940,25 +1024,46 @@ func (m Model) renderStatusBar() string {
 		modelInfo += HelpDescStyle.Render(" [Pipeline]")
 	}
 
-	// Center: Version info + Pipeline status + Agent info
+	// Center: Dynamic status info based on current state
 	var centerInfo string
-	if m.useAristoteles {
-		if m.lastAgentName != "" {
-			// Agent wurde verwendet - zeige Agent-Info
+	if m.loading && m.useAristoteles {
+		// Während der Verarbeitung: Zeige aktuellen Schritt
+		if m.currentStep != "" {
+			centerInfo = ThinkingStyle.Render(fmt.Sprintf("⏳ %s", m.currentStep))
+		} else {
+			centerInfo = ThinkingStyle.Render("⏳ Verarbeite...")
+		}
+	} else if m.useAristoteles {
+		// Nach der Verarbeitung: Zeige letzte Agent/Strategie-Info
+		if len(m.pipelineAgents) > 1 {
+			// Multi-Agent Orchestrator wurde verwendet
+			agentList := strings.Join(m.pipelineAgents, " → ")
+			centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | %d Agents: %s", Version, len(m.pipelineAgents), agentList))
+		} else if m.lastAgentName != "" {
+			// Einzelner Agent wurde verwendet
 			centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | Agent: %s (%.0f%%)", Version, m.lastAgentName, m.lastAgentConfidence*100))
 		} else if m.lastStrategyName != "" {
-			// Keine Agent-Info, aber Strategie vorhanden
+			// Strategie ohne Agent
 			centerInfo = HelpDescStyle.Render(fmt.Sprintf("v%s | %s Q:%.0f%%", Version, m.lastStrategyName, m.lastQualityScore*100))
 		} else {
 			centerInfo = HelpDescStyle.Render("v" + Version)
 		}
+	} else if m.streaming {
+		centerInfo = ThinkingStyle.Render("⏳ Streaming...")
 	} else {
 		centerInfo = HelpDescStyle.Render("v" + Version)
 	}
 
-	// Right: Connection status with Aristoteles
+	// Right: Connection status with current processing indicator
 	var status string
-	if m.useAristoteles && m.aristotelesOnline {
+	if m.loading && m.useAristoteles {
+		// Während Verarbeitung: Zeige aktiven Service/Agent
+		if m.currentAgentName != "" {
+			status = ThinkingStyle.Render("🤖 " + m.currentAgentName)
+		} else {
+			status = StatusOnlineStyle.Render(IconOnline + "Aristoteles")
+		}
+	} else if m.useAristoteles && m.aristotelesOnline {
 		status = StatusOnlineStyle.Render(IconOnline + "Aristoteles")
 	} else if m.turingOnline {
 		status = StatusOnlineStyle.Render(IconOnline + "Turing")
@@ -1230,14 +1335,26 @@ func (m Model) checkTuringStatus() tea.Msg {
 	return serviceStatusMsg{turingOnline: true}
 }
 
-// loadModels loads available models from Ollama
+// loadModels loads available models from Turing service (supports multiple providers)
 func (m Model) loadModels() tea.Msg {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	resp, err := m.ollamaClient.ListModels(ctx)
+	// Connect to Turing service via gRPC
+	conn, err := grpc.DialContext(ctx, m.turingAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
-		return modelsLoadedMsg{err: err}
+		return modelsLoadedMsg{err: fmt.Errorf("Turing nicht erreichbar: %w", err)}
+	}
+	defer conn.Close()
+
+	client := turingpb.NewTuringServiceClient(conn)
+
+	// List models via Turing (aggregates all providers: Ollama, OpenAI, Anthropic, etc.)
+	resp, err := client.ListModels(ctx, &common.Empty{})
+	if err != nil {
+		return modelsLoadedMsg{err: fmt.Errorf("Modelle konnten nicht geladen werden: %w", err)}
 	}
 
 	var modelInfos []ModelInfo
@@ -1246,11 +1363,19 @@ func (m Model) loadModels() tea.Msg {
 		if model.Size > 0 {
 			size = fmt.Sprintf("%.1f GB", float64(model.Size)/(1024*1024*1024))
 		}
+
+		// Build description with provider info
+		description := model.Name
+		if model.Provider != "" && model.Provider != "ollama" {
+			description = fmt.Sprintf("%s (%s)", model.Name, model.Provider)
+		}
+
 		modelInfos = append(modelInfos, ModelInfo{
 			Name:        model.Name,
 			Size:        size,
-			Description: model.Name,
-			Available:   true,
+			Description: description,
+			Provider:    model.Provider,
+			Available:   model.Available,
 		})
 	}
 
@@ -1381,6 +1506,11 @@ func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
 		}
 
 		// Extract agent match info from metadata (set by router)
+		isOrchestrated := false
+		taskCount := 0
+		var agentsUsed []string
+		executionMode := ""
+
 		if resp.Metadata != nil {
 			if name, ok := resp.Metadata["matched_agent_name"]; ok {
 				agentName = name
@@ -1390,6 +1520,19 @@ func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
 				if _, err := fmt.Sscanf(conf, "%f", &agentConfidence); err != nil {
 					agentConfidence = 0.0
 				}
+			}
+			// Check for orchestrator info
+			if mode, ok := resp.Metadata["orchestration_mode"]; ok && mode == "multi_task" {
+				isOrchestrated = true
+			}
+			if count, ok := resp.Metadata["task_count"]; ok {
+				fmt.Sscanf(count, "%d", &taskCount)
+			}
+			if agents, ok := resp.Metadata["agents_used"]; ok {
+				agentsUsed = strings.Split(agents, ", ")
+			}
+			if execMode, ok := resp.Metadata["execution_mode"]; ok {
+				executionMode = execMode
 			}
 		}
 
@@ -1404,6 +1547,10 @@ func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
 			agentName:       agentName,
 			agentConfidence: agentConfidence,
 			targetService:   targetService,
+			isOrchestrated:  isOrchestrated,
+			taskCount:       taskCount,
+			agentsUsed:      agentsUsed,
+			executionMode:   executionMode,
 		}
 	}
 }
@@ -1412,16 +1559,32 @@ func (m *Model) sendMessageViaAristoteles(input string) tea.Cmd {
 // This simulates the pipeline steps since actual server steps aren't streamed
 func (m Model) scheduleStepUpdates() tea.Cmd {
 	return tea.Batch(
-		tea.Tick(1500*time.Millisecond, func(t time.Time) tea.Msg {
+		// Intent-Analyse
+		tea.Tick(800*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepAnalyzing}
+		}),
+		// Task-Zerlegung (bei komplexen Anfragen)
+		tea.Tick(1800*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepDecomposing}
+		}),
+		// Agent-Matching
+		tea.Tick(2800*time.Millisecond, func(t time.Time) tea.Msg {
+			return stepUpdateMsg{step: StepMatching}
+		}),
+		// Web-Suche (falls erforderlich)
+		tea.Tick(4500*time.Millisecond, func(t time.Time) tea.Msg {
 			return stepUpdateMsg{step: StepSearching}
 		}),
-		tea.Tick(3500*time.Millisecond, func(t time.Time) tea.Msg {
+		// Inhalte laden
+		tea.Tick(7000*time.Millisecond, func(t time.Time) tea.Msg {
 			return stepUpdateMsg{step: StepFetching}
 		}),
-		tea.Tick(6000*time.Millisecond, func(t time.Time) tea.Msg {
+		// Verarbeitung
+		tea.Tick(10000*time.Millisecond, func(t time.Time) tea.Msg {
 			return stepUpdateMsg{step: StepProcessing}
 		}),
-		tea.Tick(9000*time.Millisecond, func(t time.Time) tea.Msg {
+		// Antwort generieren
+		tea.Tick(15000*time.Millisecond, func(t time.Time) tea.Msg {
 			return stepUpdateMsg{step: StepGenerating}
 		}),
 	)

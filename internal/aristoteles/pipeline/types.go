@@ -25,6 +25,10 @@ type Context struct {
 	Metadata       map[string]string
 	Options        *pb.ProcessOptions
 
+	// Translation data (for language-agnostic intent analysis)
+	PromptForAnalysis string // English translation of Prompt for intent analysis
+	SourceLanguage    string // Detected source language (e.g., "de", "en", "fr")
+
 	// Pipeline state
 	Intent     *pb.IntentResult
 	Strategy   *pb.StrategyInfo

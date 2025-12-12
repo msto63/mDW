@@ -13,7 +13,35 @@ metadata:
     author: mDW
     category: development
     tags: code, review, quality, security
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.75
+    criteria:
+        - name: "Strukturiertes Review"
+          check: "Das Review folgt einer klaren Struktur (Zusammenfassung, Kritisch, Verbesserungen, Positiv)"
+          required: true
+          weight: 1.0
+        - name: "Konkrete Hinweise"
+          check: "Gefundene Probleme werden mit konkreten Code-Zeilen oder Beispielen belegt"
+          required: true
+          weight: 1.5
+        - name: "Sicherheitsaspekte"
+          check: "Sicherheitsrelevante Aspekte wurden geprüft und erwähnt"
+          required: true
+          weight: 1.0
+        - name: "Konstruktives Feedback"
+          check: "Verbesserungsvorschläge werden mit Begründung und ggf. Code-Beispielen geliefert"
+          required: true
+          weight: 1.0
+        - name: "Bewertungsskala"
+          check: "Eine Gesamtbewertung (1-10) mit Begründung wurde abgegeben"
+          required: false
+          weight: 0.5
+
 embedding:
     - 0.025039687752723694
     - 0.0054844957776367664

@@ -31,7 +31,14 @@ func (s *Stage) Execute(ctx context.Context, pctx *pipeline.Context) error {
 
 	start := time.Now()
 
-	result, err := s.analyzer.Analyze(ctx, pctx.Prompt, pctx.ConversationID)
+	// Use translated prompt for analysis if available, otherwise use original
+	// This enables language-agnostic intent analysis (all analysis in English)
+	promptToAnalyze := pctx.PromptForAnalysis
+	if promptToAnalyze == "" {
+		promptToAnalyze = pctx.Prompt
+	}
+
+	result, err := s.analyzer.Analyze(ctx, promptToAnalyze, pctx.ConversationID)
 	if err != nil {
 		return err
 	}

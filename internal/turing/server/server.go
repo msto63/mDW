@@ -41,10 +41,10 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Host:           "0.0.0.0",
-		Port:           9003,
+		Port:           9200,
 		OllamaURL:      "http://localhost:11434",
 		OllamaTimeout:  120 * time.Second,
-		DefaultModel:   "llama3.2",
+		DefaultModel:   "mistral:7b",
 		EmbeddingModel: "nomic-embed-text",
 	}
 }

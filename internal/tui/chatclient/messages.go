@@ -29,6 +29,7 @@ type ModelInfo struct {
 	Name        string
 	Size        string
 	Description string
+	Provider    string // ollama, openai, anthropic, mistral
 	Available   bool
 }
 
@@ -103,6 +104,11 @@ type aristotelesPipelineMsg struct {
 	agentName       string  // Agent Name aus Metadata
 	agentConfidence float64 // Agent Match Confidence aus Metadata
 	targetService   string  // Ziel-Service (Turing, Leibniz, etc.)
+	// Orchestrator Info (Multi-Task)
+	isOrchestrated bool     // True wenn Orchestrator verwendet wurde
+	taskCount      int      // Anzahl der Tasks
+	agentsUsed     []string // Liste der verwendeten Agent-Namen
+	executionMode  string   // "sequential" oder "parallel"
 }
 
 // aristotelesStatusMsg is sent when Aristoteles status is checked
@@ -124,9 +130,31 @@ type agentListMsg struct {
 
 // Pipeline step names for display
 const (
-	StepAnalyzing   = "Analysiere Anfrage"
-	StepSearching   = "Web-Suche"
-	StepFetching    = "Lade Inhalte"
-	StepProcessing  = "Verarbeite Daten"
-	StepGenerating  = "Generiere Antwort"
+	StepAnalyzing     = "Analysiere Anfrage"
+	StepDecomposing   = "Zerlege in Teilaufgaben"
+	StepMatching      = "Suche passende Agents"
+	StepSearching     = "Web-Suche"
+	StepFetching      = "Lade Inhalte"
+	StepProcessing    = "Verarbeite Daten"
+	StepGenerating    = "Generiere Antwort"
+	StepOrchestrating = "Orchestriere Tasks"
 )
+
+// OrchestratorTask represents a task in the orchestrator pipeline
+type OrchestratorTask struct {
+	ID          string // Task ID (task_1, task_2, etc.)
+	Description string // Task description
+	AgentID     string // Assigned agent ID
+	AgentName   string // Assigned agent name
+	Status      string // pending, running, completed, failed
+	Output      string // Task output (when completed)
+}
+
+// orchestratorProgressMsg is sent to update orchestrator progress in real-time
+type orchestratorProgressMsg struct {
+	currentTaskIndex int                 // Index of currently running task (0-based)
+	totalTasks       int                 // Total number of tasks
+	tasks            []*OrchestratorTask // All tasks with their status
+	currentAgentName string              // Name of currently active agent
+	phase            string              // Current phase (decomposing, matching, executing)
+}

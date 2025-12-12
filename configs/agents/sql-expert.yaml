@@ -104,7 +104,35 @@ metadata:
     author: mDW
     category: development
     tags: sql, database, postgresql, optimization
-    version: 1.1.0
+    version: 1.2.0
+
+# Self-Evaluation für Qualitätssicherung
+evaluation:
+    enabled: true
+    max_iterations: 2
+    min_quality_score: 0.8
+    criteria:
+        - name: "Syntaktische Korrektheit"
+          check: "Die SQL-Query ist syntaktisch korrekt und ausführbar"
+          required: true
+          weight: 1.5
+        - name: "Formatierung"
+          check: "SQL ist gut formatiert mit Einrückungen und Kommentaren"
+          required: true
+          weight: 0.8
+        - name: "Erklärung"
+          check: "Die Query-Logik wird verständlich erklärt"
+          required: true
+          weight: 1.0
+        - name: "Best Practices"
+          check: "SQL Best Practices werden eingehalten (parametrisiert, effizient, sicher)"
+          required: true
+          weight: 1.0
+        - name: "Datenbank-Kompatibilität"
+          check: "Die verwendete SQL-Syntax passt zur angegebenen Datenbank"
+          required: false
+          weight: 0.5
+
 embedding:
     - 0.021165460348129272
     - 0.04919170215725899
